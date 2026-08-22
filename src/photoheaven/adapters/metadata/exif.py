@@ -114,8 +114,10 @@ class PillowExifExtractor(MetadataExtractor):
             logger.warning("Pillow metadata extraction failed for %s: %s", path, exc)
             # If we didn't already know this was an image, leave the type as
             # unknown so the fallback extractor can try video/container parsing.
-            fallback_type = MediaType.IMAGE if media_type is MediaType.IMAGE else MediaType.UNKNOWN
-            return MediaMetadata(media_type=fallback_type)
+            fallback_type = (
+                MediaType.IMAGE if media_type is MediaType.IMAGE else MediaType.UNKNOWN
+            )
+            return MediaMetadata(media_type=fallback_type, extracted=False)
 
     @staticmethod
     def _read_exif(img: Image.Image) -> dict:

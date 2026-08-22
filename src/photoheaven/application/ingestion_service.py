@@ -57,6 +57,8 @@ class IngestResult:
     status: str  # added, updated, skipped, error
     media: MediaFile | None = None
     message: str = ""
+    metadata_extracted: bool = True
+    """False when the metadata extractor raised an exception (e.g. corrupt image)."""
 
 
 class IngestionService:
@@ -72,15 +74,34 @@ class IngestionService:
         self.metadata_extractor = metadata_extractor
         self.repository = repository
 
+    def check_metadata(self, path: Path) -> bool:
+        """Return True if metadata can be extracted from *path*.
+
+        This performs a lightweight re-check without writing to the repository.
+        It is used by the CLI when moving corrupted files from an already
+        ingested library.
+        """
+        media_type = guess_media_type(path)
+        try:
+            self.metadata_extractor.extract(path, media_type)
+            return True
+        except Exception:
+            logger.exception("Metadata extraction failed for %s", path)
+            return False
+
     def ingest_file(self, path: Path, *, force: bool = False) -> IngestResult:
         if not path.is_file():
-            return IngestResult(status="error", message=f"Not a file: {path}")
+            return IngestResult(
+                status="error", message=f"Not a file: {path}"
+            )
 
         try:
             checksum = self.hasher.hash_file(path)
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("Checksum failed for %s", path)
-            return IngestResult(status="error", message=f"Checksum failed: {exc}")
+            return IngestResult(
+                status="error", message=f"Checksum failed: {exc}"
+            )
 
         stat = path.stat()
         existing = self.repository.get_by_checksum(checksum)
@@ -91,17 +112,19 @@ class IngestionService:
                     status="skipped",
                     media=existing,
                     message=f"Already ingested: {path}",
+                    metadata_extracted=True,
                 )
 
         media_type = guess_media_type(path)
         try:
             metadata = self.metadata_extractor.extract(path, media_type)
-        except Exception as exc:  # pragma: no cover - defensive
+        except Exception:  # pragma: no cover - defensive
             logger.exception("Metadata extraction failed for %s", path)
             # Continue with whatever we know; do not fail the whole ingestion.
             metadata = None
 
         if metadata is not None:
+            metadata_extracted = metadata.extracted
             if metadata.media_type is not MediaType.UNKNOWN:
                 media_type = metadata.media_type
             capture_datetime = metadata.capture_datetime
@@ -109,6 +132,7 @@ class IngestionService:
             model = metadata.model
             gps = metadata.gps
         else:
+            metadata_extracted = False
             capture_datetime = None
             make = None
             model = None
@@ -126,6 +150,9 @@ class IngestionService:
                 make=make,
                 model=model,
                 gps=gps,
+                face_analysis_at=existing.face_analysis_at,
+                face_analysis_version=existing.face_analysis_version,
+                metadata_extracted=metadata_extracted,
                 created_at=existing.created_at,
                 updated_at=datetime.utcnow(),
             )
@@ -141,6 +168,7 @@ class IngestionService:
                 make=make,
                 model=model,
                 gps=gps,
+                metadata_extracted=metadata_extracted,
             )
 
         self.repository.save_media(media)
@@ -149,4 +177,5 @@ class IngestionService:
             status=status,
             media=media,
             message=f"{status.capitalize()}: {path}",
+            metadata_extracted=metadata_extracted,
         )

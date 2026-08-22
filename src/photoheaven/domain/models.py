@@ -41,6 +41,15 @@ class MediaFile:
     make: Optional[str] = None
     model: Optional[str] = None
     gps: Optional[GeoPoint] = None
+    face_analysis_at: datetime | None = None
+    """When face detection was last run on this file. None means not yet analysed."""
+
+    face_analysis_version: str | None = None
+    """Identifier of the face analysis pipeline/version used."""
+
+    metadata_extracted: bool = True
+    """False when metadata extraction failed (e.g. corrupt/unreadable file)."""
+
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 
@@ -61,6 +70,6 @@ class Face:
     """Identifier of the model/pipeline that produced the embedding."""
 
     detection_confidence: float = 0.0
-    cluster_label: Optional[int] = None
-    identity_name: Optional[str] = None
+    cluster_label: int | None = None
+    identity_name: str | None = None
     created_at: datetime = field(default_factory=datetime.utcnow)

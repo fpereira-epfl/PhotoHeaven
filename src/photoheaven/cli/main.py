@@ -17,7 +17,10 @@ from photoheaven.adapters.integrity.hasher import Blake3Hasher
 from photoheaven.adapters.metadata.exif import FallbackMetadataExtractor
 from photoheaven.adapters.persistence.sqlite import SqliteMediaRepository
 from photoheaven.application.ingestion_service import IngestionService, guess_media_type
-from photoheaven.domain.models import MediaFile, MediaType
+from photoheaven.cli.faces import faces_app
+from photoheaven.domain.models import MediaFile
+
+logger = logging.getLogger(__name__)
 
 app = typer.Typer(
     name="photoheaven",
@@ -25,6 +28,7 @@ app = typer.Typer(
     no_args_is_help=True,
     context_settings={"help_option_names": ["--help", "-h"]},
 )
+app.add_typer(faces_app, name="faces")
 console = Console()
 
 # Make library log messages visible through the CLI.
@@ -98,6 +102,32 @@ def _collect_files(root: Path, recursive: bool) -> list[Path]:
     ]
 
 
+def _target_path_for_corrupted(
+    file_path: Path, ingest_root: Path, target_root: Path
+) -> Path:
+    """Return a target path for a corrupted file, preserving relative structure."""
+    try:
+        relative = file_path.resolve().relative_to(ingest_root.resolve())
+    except ValueError:
+        relative = Path(file_path.name)
+
+    target = target_root / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    # Handle name collisions by appending _1, _2, etc.
+    if not target.exists():
+        return target
+
+    stem = target.stem
+    suffix = target.suffix
+    n = 1
+    while True:
+        candidate = target.parent / f"{stem}_{n}{suffix}"
+        if not candidate.exists():
+            return candidate
+        n += 1
+
+
 @app.command()
 def ingest(
     path: Path = typer.Argument(..., help="File or directory to ingest.", exists=True),
@@ -110,6 +140,11 @@ def ingest(
     db_path: Optional[str] = typer.Option(
         None, "--db", help="Path to the SQLite library database."
     ),
+    move_corrupted_to: str | None = typer.Option(
+        None,
+        "--move-corrupted-to",
+        help="Move files whose metadata could not be extracted to this directory.",
+    ),
 ) -> None:
     """Ingest photos and videos into the library."""
     service = _build_service(_get_db_path(db_path))
@@ -119,7 +154,12 @@ def ingest(
         console.print("[yellow]No supported media files found.[/yellow]")
         raise typer.Exit(0)
 
-    counts = {"added": 0, "updated": 0, "skipped": 0, "error": 0}
+    corrupted_target: Path | None = None
+    if move_corrupted_to:
+        corrupted_target = Path(move_corrupted_to).expanduser().resolve()
+        corrupted_target.mkdir(parents=True, exist_ok=True)
+
+    counts = {"added": 0, "updated": 0, "skipped": 0, "error": 0, "moved": 0}
 
     with Progress(
         SpinnerColumn(),
@@ -131,6 +171,42 @@ def ingest(
         for file_path in files:
             result = service.ingest_file(file_path, force=force)
             counts[result.status] = counts.get(result.status, 0) + 1
+
+            should_move = False
+            if corrupted_target is not None:
+                if not result.metadata_extracted and result.status in {
+                    "added",
+                    "updated",
+                }:
+                    should_move = True
+                elif result.status == "skipped":
+                    # Already-ingested files may have been created before we
+                    # tracked metadata_extracted. Re-check them so corrupted
+                    # files can be quarantined on a subsequent run.
+                    if not service.check_metadata(file_path):
+                        should_move = True
+                        if result.media is not None:
+                            result.media.metadata_extracted = False
+                            try:
+                                service.repository.save_media(result.media)
+                            except Exception:
+                                logger.exception(
+                                    "Could not update metadata_extracted flag for %s",
+                                    file_path,
+                                )
+
+            if should_move and corrupted_target is not None:
+                try:
+                    target = _target_path_for_corrupted(
+                        file_path, path, corrupted_target
+                    )
+                    file_path.rename(target)
+                    counts["moved"] += 1
+                except OSError as exc:
+                    logger.warning(
+                        "Could not move corrupted file %s: %s", file_path, exc
+                    )
+
             progress.advance(task)
 
     table = Table(title="Ingestion summary")

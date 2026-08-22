@@ -112,7 +112,10 @@ class PillowExifExtractor(MetadataExtractor):
                 )
         except Exception as exc:
             logger.warning("Pillow metadata extraction failed for %s: %s", path, exc)
-            return MediaMetadata(media_type=MediaType.IMAGE)
+            # If we didn't already know this was an image, leave the type as
+            # unknown so the fallback extractor can try video/container parsing.
+            fallback_type = MediaType.IMAGE if media_type is MediaType.IMAGE else MediaType.UNKNOWN
+            return MediaMetadata(media_type=fallback_type)
 
     @staticmethod
     def _read_exif(img: Image.Image) -> dict:
@@ -245,10 +248,17 @@ class FallbackMetadataExtractor(MetadataExtractor):
         elif media_type is MediaType.VIDEO:
             metadata = self._video_extractor.extract(path, media_type)
         else:
-            # Guess by trying Pillow first.
+            # Guess by trying Pillow first, then video/container parsing.
             metadata = self._image_extractor.extract(path, media_type)
             if metadata.media_type is MediaType.UNKNOWN:
                 metadata = self._video_extractor.extract(path, media_type)
+            # If neither could identify it, still treat it as a video file if
+            # the extension suggests video, so it gets a sensible media type.
+            if metadata.media_type is MediaType.UNKNOWN:
+                suffix = path.suffix.lower()
+                if suffix in {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".3gp",
+                              ".webm", ".mts", ".m2ts", ".ts", ".mpg", ".mpeg"}:
+                    metadata.media_type = MediaType.VIDEO
 
         if metadata.capture_datetime is None:
             metadata.capture_datetime = _filesystem_datetime(path)

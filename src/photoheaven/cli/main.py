@@ -35,6 +35,7 @@ logging.basicConfig(
 )
 
 SUPPORTED_EXTENSIONS = {
+    # Images
     ".jpg",
     ".jpeg",
     ".png",
@@ -44,6 +45,9 @@ SUPPORTED_EXTENSIONS = {
     ".tif",
     ".heic",
     ".webp",
+    ".avif",
+    ".dng",
+    # Videos
     ".mp4",
     ".mov",
     ".avi",
@@ -51,6 +55,11 @@ SUPPORTED_EXTENSIONS = {
     ".m4v",
     ".3gp",
     ".webm",
+    ".mts",
+    ".m2ts",
+    ".ts",
+    ".mpg",
+    ".mpeg",
 }
 
 

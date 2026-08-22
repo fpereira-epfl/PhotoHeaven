@@ -32,9 +32,22 @@ def guess_media_type(path: Path) -> MediaType:
             return MediaType.VIDEO
     # Fallback to common extensions.
     suffix = path.suffix.lower()
-    if suffix in {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif", ".heic", ".webp"}:
+    if suffix in {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif", ".heic", ".webp", ".avif", ".dng"}:
         return MediaType.IMAGE
-    if suffix in {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".3gp", ".webm"}:
+    if suffix in {
+        ".mp4",
+        ".mov",
+        ".avi",
+        ".mkv",
+        ".m4v",
+        ".3gp",
+        ".webm",
+        ".mts",
+        ".m2ts",
+        ".ts",
+        ".mpg",
+        ".mpeg",
+    }:
         return MediaType.VIDEO
     return MediaType.UNKNOWN
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -447,6 +448,114 @@ def rename(
     table.add_column("Count", justify="right", style="magenta")
     for status, count in counts.items():
         table.add_row(status, str(count))
+    console.print(table)
+
+
+_METADATA_FILES = {".DS_Store", "Thumbs.db"}
+
+
+def _is_effectively_empty(directory: Path) -> tuple[bool, list[Path]]:
+    """Return (is_empty, metadata_files_to_remove).
+
+    A directory is considered empty if it contains no real files and its only
+    remaining contents are known metadata files such as .DS_Store or Thumbs.db.
+    """
+    entries = list(directory.iterdir())
+    ignored = [p for p in entries if p.is_file() and p.name in _METADATA_FILES]
+    remaining = [p for p in entries if p not in ignored]
+    return len(remaining) == 0, ignored
+
+
+@app.command()
+def clean(
+    path: Path = typer.Argument(
+        ..., help="Root folder to scan for empty directories.", exists=True, file_okay=False
+    ),
+    recursive: bool = typer.Option(
+        False,
+        "--recursive",
+        "-r",
+        help="Recursively remove empty subdirectories.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        "-n",
+        help="List empty directories without removing them.",
+    ),
+) -> None:
+    """Remove empty folders under a directory (ignoring .DS_Store / Thumbs.db)."""
+    if not path.is_dir():
+        console.print("[red]Path must be a directory.[/red]")
+        raise typer.Exit(1)
+
+    root = path.resolve()
+    removed: list[Path] = []
+    errors: list[tuple[Path, str]] = []
+
+    def _remove_directory(directory: Path, ignored: list[Path]) -> None:
+        try:
+            for metadata_file in ignored:
+                metadata_file.unlink()
+            directory.rmdir()
+            removed.append(directory)
+            suffix = f" (ignored {', '.join(p.name for p in ignored)})" if ignored else ""
+            console.print(f"🗑️  Removed {directory}{suffix}")
+        except OSError as exc:
+            errors.append((directory, str(exc)))
+
+    if recursive:
+        if dry_run:
+            # Simulate bottom-up removal: a directory is removed if it is
+            # effectively empty and all of its subdirectories are also marked
+            # for removal.
+            to_remove: set[Path] = set()
+            for parent_str, _dirs, _files in os.walk(str(root), topdown=False):
+                parent = Path(parent_str).resolve()
+                if parent == root:
+                    continue
+                entries = list(parent.iterdir())
+                ignored = [p for p in entries if p.is_file() and p.name in _METADATA_FILES]
+                remaining = [p for p in entries if p not in ignored]
+                if not any(p for p in remaining if p not in to_remove):
+                    to_remove.add(parent)
+            removed = sorted(to_remove)
+            console.print(
+                f"[cyan]Dry run — {len(removed)} empty director(y/ies) would be removed:[/cyan]"
+            )
+            for directory in removed:
+                console.print(f"🗑️  {directory}")
+        else:
+            # Walk bottom-up so children are removed before their parents.
+            for parent_str, _dirs, _files in os.walk(str(root), topdown=False):
+                parent = Path(parent_str).resolve()
+                if parent == root:
+                    continue
+                empty, ignored = _is_effectively_empty(parent)
+                if empty:
+                    _remove_directory(parent, ignored)
+    else:
+        # Only check immediate subdirectories of the root.
+        for child in sorted(root.iterdir()):
+            if not child.is_dir():
+                continue
+            empty, ignored = _is_effectively_empty(child)
+            if not empty:
+                continue
+            if dry_run:
+                removed.append(child)
+                console.print(f"🗑️  {child}")
+            else:
+                _remove_directory(child, ignored)
+
+    for directory, exc in errors:
+        console.print(f"❌ {directory}: {exc}")
+
+    table = Table(title="Clean summary")
+    table.add_column("Status", style="cyan")
+    table.add_column("Count", justify="right", style="magenta")
+    table.add_row("removed" if not dry_run else "would remove", str(len(removed)))
+    table.add_row("error", str(len(errors)))
     console.print(table)
 
 

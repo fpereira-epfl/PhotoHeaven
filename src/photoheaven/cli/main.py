@@ -296,6 +296,160 @@ def show(
     _show_folder(path, files, repository)
 
 
+def _capture_datetime_for_rename(path: Path) -> datetime:
+    """Return capture date if available, otherwise filesystem modified time."""
+    media_type = guess_media_type(path)
+    metadata = FallbackMetadataExtractor().extract(path, media_type)
+    if metadata.capture_datetime is not None:
+        return metadata.capture_datetime
+    return datetime.fromtimestamp(path.stat().st_mtime)
+
+
+def _unique_target_name(
+    base: str, ext: str, directory: Path, used_names: dict[Path, set[str]]
+) -> str:
+    """Return a unique file name in *directory*, adding _1, _2, etc. if needed."""
+    used = used_names.setdefault(directory, set())
+
+    def _available(name: str) -> bool:
+        return name not in used and not (directory / name).exists()
+
+    target_name = f"{base}{ext}"
+    if _available(target_name):
+        used.add(target_name)
+        return target_name
+
+    n = 1
+    while True:
+        candidate = f"{base}_{n}{ext}"
+        if _available(candidate):
+            used.add(candidate)
+            return candidate
+        n += 1
+
+
+@app.command()
+def rename(
+    path: Path = typer.Argument(
+        ..., help="Photo, video, or folder to rename.", exists=True
+    ),
+    recursive: bool = typer.Option(
+        False, "--recursive", "-r", help="Rename files in subfolders too."
+    ),
+    organize: Optional[str] = typer.Option(
+        None,
+        "--organize",
+        "-o",
+        help="Move files into YYYY/MM folders under this root path.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        "-n",
+        help="Show planned renames/moves without actually doing them.",
+    ),
+    db_path: Optional[str] = typer.Option(
+        None, "--db", help="Path to the SQLite library database."
+    ),
+) -> None:
+    """Rename photos/videos to YYYY-MM-DD_HHhMMmSSs.<ext> based on capture date."""
+    _ = _get_db_path(db_path)  # ensures default db dir exists, even if unused here
+
+    files = _collect_files(path, recursive)
+    if not files:
+        console.print("[yellow]No supported media files found.[/yellow]")
+        raise typer.Exit(0)
+
+    if organize:
+        root = Path(organize).expanduser().resolve()
+        root.mkdir(parents=True, exist_ok=True)
+    else:
+        root = path if path.is_dir() else path.parent
+
+    used_names: dict[Path, set[str]] = {}
+    plans: list[tuple[Path, Path]] = []
+    skipped: list[Path] = []
+    planning_errors: list[tuple[Path, str]] = []
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task(f"Planning {len(files)} rename(s)...", total=len(files))
+        for file_path in sorted(files):
+            try:
+                dt = _capture_datetime_for_rename(file_path)
+                base = dt.strftime("%Y-%m-%d_%Hh%Mm%Ss")
+                ext = file_path.suffix.lower()
+
+                # Already named with the correct date prefix — leave it alone.
+                if file_path.stem.startswith(base) and not organize:
+                    skipped.append(file_path)
+                    progress.advance(task)
+                    continue
+
+                if organize:
+                    target_dir = root / f"{dt:%Y}" / f"{dt:%m}"
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                else:
+                    target_dir = file_path.parent
+
+                target_name = _unique_target_name(base, ext, target_dir, used_names)
+                target = target_dir / target_name
+                if target == file_path:
+                    skipped.append(file_path)
+                    progress.advance(task)
+                    continue
+                plans.append((file_path, target))
+            except Exception as exc:
+                planning_errors.append((file_path, str(exc)))
+                logger.warning("Could not plan rename for %s: %s", file_path, exc)
+            progress.advance(task)
+
+    renamed_count = 0
+    execution_errors: list[tuple[Path, str]] = []
+
+    if dry_run:
+        if plans:
+            table = Table(title="Planned renames/moves")
+            table.add_column("Current name", style="cyan", no_wrap=True)
+            table.add_column("New name", style="magenta", no_wrap=True)
+            for current, new in plans:
+                table.add_row(str(current), str(new))
+            console.print(table)
+        renamed_count = len(plans)
+    else:
+        for current, new in plans:
+            try:
+                current.rename(new)
+                console.print(f"✅ {current} → {new}")
+                renamed_count += 1
+            except Exception as exc:
+                execution_errors.append((current, str(exc)))
+                logger.warning("Rename failed for %s: %s", current, exc)
+        for file_path in skipped:
+            console.print(f"⏭️  {file_path} (already named)")
+        for file_path, exc in planning_errors:
+            console.print(f"❌ {file_path}: {exc}")
+        for file_path, exc in execution_errors:
+            console.print(f"❌ {file_path}: {exc}")
+
+    counts = {
+        "renamed": renamed_count,
+        "skipped": len(skipped),
+        "error": len(planning_errors) + len(execution_errors),
+    }
+
+    table = Table(title="Rename summary")
+    table.add_column("Status", style="cyan")
+    table.add_column("Count", justify="right", style="magenta")
+    for status, count in counts.items():
+        table.add_row(status, str(count))
+    console.print(table)
+
+
 @app.command()
 def version() -> None:
     """Print the PhotoHeaven version."""

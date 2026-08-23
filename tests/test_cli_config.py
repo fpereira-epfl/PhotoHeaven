@@ -15,21 +15,20 @@ def test_resolve_db_path_prefers_explicit_value() -> None:
 def test_resolve_db_path_uses_library_option(tmp_path: Path) -> None:
     cli_config.state["library"] = str(tmp_path / "MyLibrary.photoslibrary")
     assert cli_config.resolve_db_path(None) == str(
-        tmp_path / "MyLibrary.photoslibrary" / "photoheaven.db"
+        tmp_path / "MyLibrary.photoslibrary" / "db" / "photoheaven.db"
     )
     cli_config.state["library"] = None
 
 
-def test_resolve_library_root_for_self_contained_db(tmp_path: Path) -> None:
+def test_resolve_library_package_for_library_db(tmp_path: Path) -> None:
     library = tmp_path / "MyLibrary.photoslibrary"
-    db_path = library / "photoheaven.db"
-    assert cli_config.resolve_library_root(str(db_path)) == str(library)
+    db_path = library / "db" / "photoheaven.db"
+    assert cli_config.resolve_library_package(str(db_path)) == str(library)
 
 
-def test_resolve_library_root_for_project_style_db(tmp_path: Path) -> None:
-    project = tmp_path / "Project"
-    db_path = project / "db" / "photoheaven.db"
-    assert cli_config.resolve_library_root(str(db_path)) == str(project)
+def test_resolve_library_package_falls_back_to_parent(tmp_path: Path) -> None:
+    custom = tmp_path / "custom.db"
+    assert cli_config.resolve_library_package(str(custom)) == str(tmp_path)
 
 
 def test_resolve_photo_root_finds_common_folder() -> None:

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-DB_FILENAME = "photoheaven.db"
+DB_DIR = "db"
+DB_NAME = "photoheaven.db"
+DB_FILENAME = DB_DIR + "/" + DB_NAME
+FILES_DIR = "files"
 
 state: dict[str, str | None] = {"library": None}
 
@@ -21,20 +24,19 @@ def resolve_db_path(db_path: str | None) -> str:
         return db_path
     library = state.get("library")
     if library:
-        return str(Path(library).expanduser().resolve() / DB_FILENAME)
-    return str(Path.cwd() / "db" / DB_FILENAME)
+        return str(
+            Path(library).expanduser().resolve() / DB_DIR / DB_NAME
+        )
+    return str(Path.cwd() / DB_DIR / DB_NAME)
 
 
-def resolve_library_root(db_path: str) -> str:
-    """Return the library root folder for a given database path.
+def resolve_library_package(db_path: str) -> str:
+    """Return the self-contained library package folder.
 
-    - ``<root>/photoheaven.db`` → ``<root>``
     - ``<root>/db/photoheaven.db`` → ``<root>``
     """
     path = Path(db_path).expanduser().resolve()
-    if path.name != DB_FILENAME:
-        return str(path.parent)
-    if path.parent.name == "db":
+    if path.name == DB_NAME and path.parent.name == DB_DIR:
         return str(path.parent.parent)
     return str(path.parent)
 

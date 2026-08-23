@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -17,7 +18,7 @@ from photoheaven.adapters.integrity.hasher import Blake3Hasher
 from photoheaven.adapters.metadata.exif import FallbackMetadataExtractor
 from photoheaven.adapters.persistence.sqlite import SqliteMediaRepository
 from photoheaven.application.ingestion_service import IngestionService, guess_media_type
-from photoheaven.application.library_service import LibraryMigrationService
+from photoheaven.application.library_service import LibraryService
 from photoheaven.cli import config as cli_config
 from photoheaven.cli.faces import faces_app
 from photoheaven.domain.models import MediaFile
@@ -242,20 +243,154 @@ def info(
     media_count = repository.count_media()
     face_count = repository.count_faces()
 
-    photo_root = cli_config.resolve_photo_root(
-        repository.get_all_media_paths()
-    )
+    paths = repository.get_all_media_paths()
+    photo_root = cli_config.resolve_photo_root(paths)
+    package_root = cli_config.resolve_library_package(resolved_db)
     if photo_root is None:
-        photo_root = cli_config.resolve_library_root(resolved_db)
+        photo_root = str(Path(package_root) / cli_config.FILES_DIR)
 
     table = Table(title="Library overview")
     table.add_column("Metric", style="cyan")
     table.add_column("Value", justify="right", style="magenta")
-    table.add_row("Library root", photo_root)
+    table.add_row("Library package", package_root)
+    table.add_row("Photo root", photo_root)
     table.add_row("Media files", str(media_count))
     table.add_row("Detected faces", str(face_count))
     table.add_row("Database", resolved_db)
     console.print(table)
+
+
+_REBASE_DATE_RE = re.compile(r"^(.*)/\d{4}/\d{2}(?:/|$)")
+
+
+def _rebase_path(path: str, new_root: str) -> str:
+    """Return path rebased from its old root to ``new_root``.
+
+    The old root is the absolute path prefix before the first ``YYYY/MM``
+    segment. For example ``/Queue/2008/12/img.jpg`` becomes
+    ``<new_root>/2008/12/img.jpg``.
+    """
+    match = _REBASE_DATE_RE.match(path)
+    if not match:
+        return path
+
+    suffix_start = len(match.group(1)) + 1  # skip the matched '/'
+    suffix = path[suffix_start:]
+    return f"{new_root}/{suffix}"
+
+
+@app.command()
+def rebase(
+    path: Path = typer.Argument(
+        ...,
+        help="New library package root. Stored paths are rebased to <path>/files.",
+    ),
+    db_path: Optional[str] = typer.Option(
+        None, "--db", help="Path to the SQLite library database."
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        "-n",
+        help="Show what would happen without making changes.",
+    ),
+    debug: bool = typer.Option(
+        False,
+        "--debug",
+        help="Show why paths were left unchanged.",
+    ),
+) -> None:
+    """Rebase all stored media paths to a new library root."""
+    resolved_db = _get_db_path(db_path)
+    repository = SqliteMediaRepository(resolved_db)
+    paths = repository.get_all_media_paths()
+
+    if not paths:
+        console.print("[yellow]No media paths in database.[/yellow]")
+        raise typer.Exit(0)
+
+    new_root = str(Path(path).expanduser().resolve() / "files")
+    updated = 0
+    unchanged = 0
+    unchanged_reasons: dict[str, int] = {}
+    unchanged_samples: dict[str, list[str]] = {}
+    _DEBUG_SAMPLE_LIMIT = 20
+
+    def _record_unchanged(media_path: str, reason: str) -> None:
+        nonlocal unchanged
+        unchanged += 1
+        unchanged_reasons[reason] = unchanged_reasons.get(reason, 0) + 1
+        if debug:
+            samples = unchanged_samples.setdefault(reason, [])
+            if len(samples) < _DEBUG_SAMPLE_LIMIT:
+                samples.append(media_path)
+
+    def _unchanged_reason(media_path: str) -> str:
+        if media_path == new_root or media_path.startswith(new_root + "/"):
+            return "already under new root"
+        if _REBASE_DATE_RE.search(media_path) is None:
+            return "no YYYY/MM folder segment found"
+        return "other"
+
+    if dry_run:
+        for media_path in paths:
+            new_path = _rebase_path(media_path, new_root)
+            if new_path != media_path:
+                updated += 1
+            else:
+                _record_unchanged(media_path, _unchanged_reason(media_path))
+    else:
+        offset = 0
+        limit = 1000
+        while True:
+            batch = repository.list_media(limit=limit, offset=offset)
+            if not batch:
+                break
+
+            for media in batch:
+                new_path = _rebase_path(media.path, new_root)
+                if new_path == media.path:
+                    _record_unchanged(
+                        media.path, _unchanged_reason(media.path)
+                    )
+                    continue
+
+                media.path = new_path
+                media.updated_at = datetime.utcnow()
+                repository.save_media(media)
+                updated += 1
+
+            if len(batch) < limit:
+                break
+            offset += limit
+
+    table = Table(title="Rebase summary")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Count", justify="right", style="magenta")
+    table.add_row("New root", new_root)
+    table.add_row("Paths updated", str(updated))
+    table.add_row("Paths unchanged", str(unchanged))
+    console.print(table)
+
+    if debug and unchanged_reasons:
+        debug_table = Table(title="Unchanged path reasons")
+        debug_table.add_column("Reason", style="cyan")
+        debug_table.add_column("Count", justify="right", style="magenta")
+        for reason, count in sorted(unchanged_reasons.items()):
+            debug_table.add_row(reason, str(count))
+        console.print(debug_table)
+
+        for reason, samples in unchanged_samples.items():
+            sample_table = Table(
+                title=f"Sample unchanged paths — {reason} (first {len(samples)})"
+            )
+            sample_table.add_column("Path", style="cyan")
+            for sample_path in samples:
+                sample_table.add_row(sample_path)
+            console.print(sample_table)
+
+    if dry_run:
+        console.print("[yellow]Dry run — no changes were made.[/yellow]")
 
 
 def _format_datetime(value: Optional[datetime]) -> str:
@@ -672,7 +807,7 @@ def init(
     ),
 ) -> None:
     """Create a new self-contained PhotoHeaven library."""
-    service = LibraryMigrationService(Blake3Hasher())
+    service = LibraryService(Blake3Hasher())
 
     try:
         db_path = service.init_library(library_path)
@@ -682,85 +817,6 @@ def init(
         raise typer.Exit(1) from exc
 
     console.print(f"Created library database at [cyan]{db_path}[/cyan]")
-
-
-@app.command()
-def migrate(
-    source: Path = typer.Argument(
-        ...,
-        help=(
-            "Source folder containing media files. When using --paths-only, "
-            "this is the old root where files used to be; it need not exist."
-        ),
-    ),
-    library: Path = typer.Argument(
-        ..., help="Target library folder (created if missing)."
-    ),
-    db_path: Optional[str] = typer.Option(
-        None,
-        "--db",
-        help="Source database path (defaults to ./db/photoheaven.db).",
-    ),
-    move_files: bool = typer.Option(
-        False,
-        "--move-files",
-        help="Physically move files to the library instead of copying them.",
-    ),
-    paths_only: bool = typer.Option(
-        False,
-        "--paths-only",
-        help=(
-            "Do not touch media files. Only copy the database and update "
-            "stored paths from SOURCE to LIBRARY. Use this when you have "
-            "already moved the files manually."
-        ),
-    ),
-    dry_run: bool = typer.Option(
-        False,
-        "--dry-run",
-        "-n",
-        help="Show what would happen without making changes.",
-    ),
-) -> None:
-    """Migrate media files and a database into a self-contained library."""
-    if not paths_only and (not source.exists() or not source.is_dir()):
-        console.print(
-            "[red]Source must be an existing directory unless using --paths-only.[/red]"
-        )
-        raise typer.Exit(1)
-
-    service = LibraryMigrationService(Blake3Hasher())
-    source_db = Path(db_path) if db_path else None
-
-    try:
-        result = service.migrate(
-            source,
-            library,
-            source_db,
-            move_files=move_files,
-            paths_only=paths_only,
-            dry_run=dry_run,
-        )
-    except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(1) from exc
-    except Exception as exc:
-        logger.exception("Library migration failed")
-        console.print(f"[red]Migration failed:[/red] {exc}")
-        raise typer.Exit(1) from exc
-
-    table = Table(title="Migration summary")
-    table.add_column("Metric", style="cyan")
-    table.add_column("Count", justify="right", style="magenta")
-    table.add_row("Files copied", str(result.files_copied))
-    table.add_row("Files moved", str(result.files_moved))
-    table.add_row("Files skipped (duplicates)", str(result.files_skipped))
-    table.add_row("Errors", str(result.errors))
-    table.add_row("Media paths updated", str(result.media_paths_updated))
-    console.print(table)
-    console.print(f"Library database: [cyan]{result.target_db_path}[/cyan]")
-    if dry_run:
-        console.print("[yellow]Dry run — no changes were made.[/yellow]")
 
 
 @app.command()

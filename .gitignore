@@ -221,5 +221,6 @@ __marimo__/
 .DS_Store
 .opencode
 opencode.sh
+.venv*
 .env
 db/

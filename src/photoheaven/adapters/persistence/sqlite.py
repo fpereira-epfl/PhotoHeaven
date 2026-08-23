@@ -214,11 +214,46 @@ class SqliteMediaRepository(MediaRepository):
             return _media_to_domain(row) if row else None
 
     def save_media(self, media: MediaFile) -> None:
+        """Persist a media file, updating in place and keeping faces linked.
+
+        If another media record already occupies the same path with a different
+        id (e.g. the file at that path was replaced with different contents),
+        the stale record and its faces are removed first.
+        """
         with self._session() as session:
+            # Remove any stale record that holds the same path but a different
+            # identity. This happens when a file's contents change in place.
+            stale = (
+                session.query(_MediaFileORM)
+                .filter(
+                    _MediaFileORM.path == media.path,
+                    _MediaFileORM.id != media.id,
+                )
+                .first()
+            )
+            if stale is not None:
+                session.query(_FaceORM).filter_by(media_id=stale.id).delete()
+                session.delete(stale)
+
             existing = session.get(_MediaFileORM, media.id)
             if existing:
-                session.delete(existing)
-            session.add(_media_to_orm(media))
+                # Update in place so foreign-key links to faces are preserved.
+                existing.path = media.path
+                existing.checksum = media.checksum
+                existing.size_bytes = media.size_bytes
+                existing.mtime = media.mtime
+                existing.media_type = media.media_type.value
+                existing.capture_datetime = media.capture_datetime
+                existing.make = media.make
+                existing.model = media.model
+                existing.latitude = media.gps.latitude if media.gps else None
+                existing.longitude = media.gps.longitude if media.gps else None
+                existing.face_analysis_at = media.face_analysis_at
+                existing.face_analysis_version = media.face_analysis_version
+                existing.metadata_extracted = 1 if media.metadata_extracted else 0
+                existing.updated_at = media.updated_at
+            else:
+                session.add(_media_to_orm(media))
             session.commit()
 
     def count_media(self) -> int:
@@ -237,11 +272,22 @@ class SqliteMediaRepository(MediaRepository):
             return [_media_to_domain(row) for row in rows]
 
     def save_face(self, face: Face) -> None:
+        """Persist a face record, updating in place if it already exists."""
         with self._session() as session:
             existing = session.get(_FaceORM, face.id)
             if existing:
-                session.delete(existing)
-            session.add(_face_to_orm(face))
+                existing.media_id = face.media_id
+                existing.bbox_x1 = face.bbox[0]
+                existing.bbox_y1 = face.bbox[1]
+                existing.bbox_x2 = face.bbox[2]
+                existing.bbox_y2 = face.bbox[3]
+                existing.embedding_blob = _embedding_to_bytes(face.embedding)
+                existing.embedding_version = face.embedding_version
+                existing.detection_confidence = face.detection_confidence
+                existing.cluster_label = face.cluster_label
+                existing.identity_name = face.identity_name
+            else:
+                session.add(_face_to_orm(face))
             session.commit()
 
     def count_faces(self) -> int:

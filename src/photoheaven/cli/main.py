@@ -823,6 +823,14 @@ def rename(
     skipped: list[Path] = []
     planning_errors: list[tuple[Path, str]] = []
 
+    def _display_path(path: Path) -> str:
+        """Return a short display path rooted at the library files folder."""
+        try:
+            relative = path.resolve().relative_to(root.resolve())
+            return f"$/{relative}"
+        except ValueError:
+            return str(path)
+
     def _face_names_for(path: Path, checksum: str) -> list[str]:
         if not include_faces:
             return []
@@ -862,14 +870,16 @@ def rename(
                 else:
                     target_dir = file_path.parent
 
+                ideal_target = target_dir / f"{base}{ext}"
+                if ideal_target.resolve() == file_path.resolve():
+                    skipped.append(file_path)
+                    progress.advance(task)
+                    continue
+
                 target_name = _unique_target_name(
                     base, ext, target_dir, used_names
                 )
                 target = target_dir / target_name
-                if target == file_path:
-                    skipped.append(file_path)
-                    progress.advance(task)
-                    continue
                 plans.append((file_path, target, checksum))
             except Exception as exc:
                 planning_errors.append((file_path, str(exc)))
@@ -885,14 +895,14 @@ def rename(
             table.add_column("Current name", style="cyan", no_wrap=True)
             table.add_column("New name", style="magenta", no_wrap=True)
             for current, new, _ in plans:
-                table.add_row(str(current), str(new))
+                table.add_row(_display_path(current), _display_path(new))
             console.print(table)
         renamed_count = len(plans)
     else:
         for current, new, checksum in plans:
             try:
                 current.rename(new)
-                console.print(f"✅ {current} → {new}")
+                console.print(f"✅ {_display_path(current)} → {_display_path(new)}")
                 renamed_count += 1
 
                 media = repository.get_by_checksum(checksum)
@@ -909,11 +919,11 @@ def rename(
                 execution_errors.append((current, str(exc)))
                 logger.warning("Rename failed for %s: %s", current, exc)
         for file_path in skipped:
-            console.print(f"⏭️  {file_path} (already named)")
+            console.print(f"⏭️  {_display_path(file_path)} (already named)")
         for file_path, exc in planning_errors:
-            console.print(f"❌ {file_path}: {exc}")
+            console.print(f"❌ {_display_path(file_path)}: {exc}")
         for file_path, exc in execution_errors:
-            console.print(f"❌ {file_path}: {exc}")
+            console.print(f"❌ {_display_path(file_path)}: {exc}")
 
     counts = {
         "renamed": renamed_count,

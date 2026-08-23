@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -50,6 +51,7 @@ def test_rename_organize_defaults_to_library_files_root(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert "Planned renames/moves" in result.output
+    assert "$/2008/12/old.jpg" in result.output
     assert "renamed │     1" in result.output
     cli_config.state["library"] = None
 
@@ -83,6 +85,27 @@ def test_rename_updates_stored_path_after_moving_file(tmp_path: Path) -> None:
     assert updated is not None
     assert updated.path == str(renamed[0])
     cli_config.state["library"] = None
+
+
+def test_rename_skips_files_already_named_correctly(tmp_path: Path) -> None:
+    library = tmp_path / "Library.photoslibrary"
+    db_path = library / "db" / "photoheaven.db"
+    db_path.parent.mkdir(parents=True)
+    SqliteMediaRepository(str(db_path))
+
+    correctly_named = library / "files" / "2024-05-01_12h30m45s.jpg"
+    correctly_named.parent.mkdir(parents=True)
+    correctly_named.write_bytes(b"not an image")
+    expected_mtime = datetime(2024, 5, 1, 12, 30, 45).timestamp()
+    os.utime(correctly_named, (expected_mtime, expected_mtime))
+
+    cli_config.state["library"] = str(library)
+    result = runner.invoke(app, ["rename", "--dry-run"])
+    cli_config.state["library"] = None
+
+    assert result.exit_code == 0
+    assert "skipped │     1" in result.output
+    assert "renamed │     0" in result.output
 
 
 def test_clean_defaults_to_library_files_root(tmp_path: Path) -> None:

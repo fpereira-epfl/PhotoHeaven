@@ -53,6 +53,9 @@ class MediaFile:
     metadata_extracted: bool = True
     """False when metadata extraction failed (e.g. corrupt/unreadable file)."""
 
+    perceptual_hash: str | None = None
+    """Hex perceptual hash (e.g. pHash) used for near-duplicate detection."""
+
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 
@@ -62,7 +65,8 @@ class MediaFile:
             f"checksum={self.checksum!r}, size_bytes={self.size_bytes}, "
             f"media_type={self.media_type}, gps=<redacted>, "
             f"face_analysis_at={self.face_analysis_at}, "
-            f"metadata_extracted={self.metadata_extracted})"
+            f"metadata_extracted={self.metadata_extracted}, "
+            f"perceptual_hash={self.perceptual_hash!r})"
         )
 
 

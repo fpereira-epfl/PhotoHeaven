@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -24,16 +25,18 @@ def _make_jpeg(path: Path) -> None:
     Image.new("RGB", (1, 1), color="red").save(path, "JPEG")
 
 
-def _media(path: str) -> MediaFile:
-    return MediaFile(
-        id=str(uuid4()),
-        path=path,
-        checksum="abc",
-        size_bytes=1,
-        mtime=datetime(2024, 5, 1, 12, 30, 45).timestamp(),
-        media_type=MediaType.IMAGE,
-        capture_datetime=datetime(2024, 5, 1, 12, 30, 45),
-    )
+def _media(path: str, **kwargs: object) -> MediaFile:
+    defaults = {
+        "id": str(uuid4()),
+        "path": path,
+        "checksum": "abc",
+        "size_bytes": 1,
+        "mtime": datetime(2024, 5, 1, 12, 30, 45).timestamp(),
+        "media_type": MediaType.IMAGE,
+        "capture_datetime": datetime(2024, 5, 1, 12, 30, 45),
+    }
+    defaults.update(kwargs)
+    return MediaFile(**defaults)
 
 
 def test_rename_organize_defaults_to_library_files_root(tmp_path: Path) -> None:
@@ -204,7 +207,7 @@ def test_rename_include_faces_orders_names_by_importance(tmp_path: Path) -> None
     db_path.parent.mkdir(parents=True)
     repo = SqliteMediaRepository(str(db_path))
 
-    old_file = library / "files" / "old.jpg"
+    old_file = library / "files" / "2024-05-01_12h30m45s.jpg"
     old_file.parent.mkdir(parents=True)
     old_file.write_bytes(b"not an image")
 
@@ -258,3 +261,64 @@ def test_rename_include_faces_orders_names_by_importance(tmp_path: Path) -> None
     alice_pos = renamed[0].name.find("Alice")
     bob_pos = renamed[0].name.find("Bob")
     assert alice_pos < bob_pos
+
+
+def test_dedupe_list_shows_groups(tmp_path: Path) -> None:
+    library = tmp_path / "Library.photoslibrary"
+    db_path = library / "db" / "photoheaven.db"
+    db_path.parent.mkdir(parents=True)
+    repo = SqliteMediaRepository(str(db_path))
+
+    source = library / "files" / "source.jpg"
+    dup = library / "files" / "dup.jpg"
+    source.parent.mkdir(parents=True)
+    Image.new("RGB", (50, 50), color="orange").save(source)
+    shutil.copy2(source, dup)
+
+    dt = datetime(2024, 5, 1, 12, 0, 0)
+    repo.save_media(
+        _media(str(source), checksum="c1", size_bytes=5000, capture_datetime=dt)
+    )
+    repo.save_media(
+        _media(str(dup), checksum="c2", size_bytes=1000, capture_datetime=dt)
+    )
+
+    cli_config.state["library"] = str(library)
+    runner.invoke(app, ["dedupe"])
+    result = runner.invoke(app, ["dedupe", "--list"])
+    cli_config.state["library"] = None
+
+    assert result.exit_code == 0
+    assert "Duplicate groups: 1" in result.output
+    assert "★ keep" in result.output
+    assert source.name in result.output
+    assert dup.name in result.output
+
+
+def test_dedupe_quiet_suppresses_progress(tmp_path: Path) -> None:
+    library = tmp_path / "Library.photoslibrary"
+    db_path = library / "db" / "photoheaven.db"
+    db_path.parent.mkdir(parents=True)
+    repo = SqliteMediaRepository(str(db_path))
+
+    source = library / "files" / "source.jpg"
+    dup = library / "files" / "dup.jpg"
+    source.parent.mkdir(parents=True)
+    Image.new("RGB", (50, 50), color="orange").save(source)
+    shutil.copy2(source, dup)
+
+    dt = datetime(2024, 5, 1, 12, 0, 0)
+    repo.save_media(
+        _media(str(source), checksum="c1", size_bytes=5000, capture_datetime=dt)
+    )
+    repo.save_media(
+        _media(str(dup), checksum="c2", size_bytes=1000, capture_datetime=dt)
+    )
+
+    cli_config.state["library"] = str(library)
+    result = runner.invoke(app, ["dedupe", "--quiet"])
+    cli_config.state["library"] = None
+
+    assert result.exit_code == 0
+    assert "Groups found" in result.output
+    assert "Comparing candidates" not in result.output

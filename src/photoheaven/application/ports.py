@@ -262,6 +262,35 @@ class MediaRepository(ABC):
         """Return a mapping of identity name to distinct-photo count."""
         raise NotImplementedError
 
+    @abstractmethod
+    def update_media_perceptual_hash(
+        self, media_id: str, perceptual_hash: str
+    ) -> None:
+        """Store the perceptual hash for a media file."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def clear_duplicate_groups(self) -> None:
+        """Remove all stored duplicate groups."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def save_duplicate_group(
+        self, group_id: str, members: list[dict]
+    ) -> None:
+        """Persist a duplicate group and its member links."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_duplicate_groups(self) -> list[dict]:
+        """Return duplicate groups with member details.
+
+        Each item is a dict with keys ``group_id``, ``created_at``, and
+        ``members``. Each member dict contains ``media_id``, ``path``,
+        ``size_bytes``, ``is_primary``, and ``match_level``.
+        """
+        raise NotImplementedError
+
 
 class FaceAnalyzer(ABC):
     """Detects faces and computes embeddings for a media file."""

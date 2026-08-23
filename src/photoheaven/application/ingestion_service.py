@@ -153,6 +153,7 @@ class IngestionService:
                 face_analysis_at=existing.face_analysis_at,
                 face_analysis_version=existing.face_analysis_version,
                 metadata_extracted=metadata_extracted,
+                perceptual_hash=existing.perceptual_hash,
                 created_at=existing.created_at,
                 updated_at=datetime.utcnow(),
             )

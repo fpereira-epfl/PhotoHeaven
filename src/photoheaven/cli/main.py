@@ -8,16 +8,19 @@ import re
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.live import Live
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from photoheaven.adapters.integrity.hasher import Blake3Hasher
+from photoheaven.adapters.integrity.perceptual_hasher import PerceptualHasher
 from photoheaven.adapters.metadata.exif import FallbackMetadataExtractor
 from photoheaven.adapters.persistence.sqlite import SqliteMediaRepository
+from photoheaven.application.dedupe_service import DedupeProgress, DedupeService
 from photoheaven.application.ingestion_service import IngestionService, guess_media_type
 from photoheaven.application.library_service import LibraryService
 from photoheaven.cli import config as cli_config
@@ -754,6 +757,160 @@ def inspect(
     _show_folder(target_path, files, repository)
 
 
+def _member_quality_key(member: dict) -> tuple:
+    """Sort duplicate-group members so the best file comes first."""
+    path = Path(member["path"])
+    ext = path.suffix.lower()
+    is_heic = ext in {".heic", ".heif"}
+    return (
+        not is_heic,
+        -member["size_bytes"],
+        len(path.name),
+        path.name,
+    )
+
+
+@app.command()
+def dedupe(
+    list_: bool = typer.Option(
+        False,
+        "--list",
+        "-l",
+        help="List existing duplicate groups instead of scanning.",
+    ),
+    reset: bool = typer.Option(
+        False,
+        "--reset",
+        help="Clear existing groups and rescan from scratch.",
+    ),
+    max_distance: int = typer.Option(
+        5,
+        "--max-distance",
+        help="Maximum perceptual-hash Hamming distance for a match.",
+    ),
+    quiet: bool = typer.Option(
+        False,
+        "--quiet",
+        "-q",
+        help="Suppress live progress output.",
+    ),
+) -> None:
+    """Find duplicate photos/videos using metadata, checksum, and perceptual hash."""
+    db = _get_db_path()
+    repository = SqliteMediaRepository(db)
+    service = DedupeService(
+        repository=repository,
+        perceptual_hasher=PerceptualHasher(),
+    )
+
+    if list_:
+        groups = service.list_duplicate_groups()
+        if not groups:
+            console.print("[yellow]No duplicate groups found.[/yellow]")
+            raise typer.Exit(0)
+
+        console.print(f"[bold cyan]Duplicate groups: {len(groups)}[/bold cyan]\n")
+        for index, group in enumerate(groups, start=1):
+            sorted_members = sorted(group["members"], key=_member_quality_key)
+            primary = sorted_members[0]
+            primary_path = Path(primary["path"])
+            primary_ext = primary_path.suffix.lower().lstrip(".").upper()
+            console.print(
+                f"[bold cyan]Group {index} — {primary_path.name} "
+                f"(best: {primary_ext}, {_format_size(primary['size_bytes'])})[/bold cyan]"
+            )
+            for member in sorted_members:
+                marker = "[green]★ keep[/green]" if member["is_primary"] else "[yellow]  dup[/yellow]"
+                size = _format_size(member["size_bytes"])
+                console.print(
+                    f"  {marker} {member['path']}  [cyan]{size}[/cyan]"
+                )
+            console.print()
+        raise typer.Exit(0)
+
+    result = _run_dedupe_scan(service, reset, max_distance, quiet)
+
+    table = Table(title="Dedupe summary")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Count", justify="right", style="magenta")
+    table.add_row("Groups found", str(result.groups_created))
+    table.add_row("Duplicate files", str(result.total_duplicates))
+    table.add_row("Perceptual hashes computed", str(result.hashes_computed))
+    table.add_row("Checksum matches", str(result.checksum_matches))
+    table.add_row("Perceptual matches", str(result.perceptual_matches))
+    table.add_row("Metadata matches", str(result.metadata_matches))
+    console.print(table)
+
+
+def _run_dedupe_scan(
+    service: DedupeService,
+    reset: bool,
+    max_distance: int,
+    quiet: bool,
+) -> Any:
+    """Run deduplication with optional live progress display."""
+    if quiet:
+        return service.find_duplicates(
+            reset=reset,
+            max_distance=max_distance,
+            progress_callback=None,
+        )
+
+    progress_state = DedupeProgress()
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TextColumn("{task.fields[info]}"),
+        console=console,
+        transient=False,
+    )
+    hash_task = progress.add_task(
+        "Computing hashes", total=1, info="loading..."
+    )
+    pair_task = progress.add_task(
+        "Comparing candidates", total=1, info="loading..."
+    )
+    group_task = progress.add_task(
+        "Groups found", total=1, info="0 dup files"
+    )
+
+    def _progress_callback(snapshot: DedupeProgress) -> None:
+        progress_state.total_media = snapshot.total_media
+        progress_state.hashes_total = snapshot.hashes_total
+        progress_state.hashes_done = snapshot.hashes_done
+        progress_state.candidate_pairs_checked = snapshot.candidate_pairs_checked
+        progress_state.groups_found = snapshot.groups_found
+        progress_state.duplicate_files_found = snapshot.duplicate_files_found
+
+        progress.update(
+            hash_task,
+            total=max(snapshot.hashes_total, 1),
+            completed=snapshot.hashes_done,
+            info=f"{snapshot.hashes_done}/{snapshot.hashes_total} hashes",
+        )
+        progress.update(
+            pair_task,
+            total=max(snapshot.total_media, 1),
+            completed=min(snapshot.candidate_pairs_checked, snapshot.total_media),
+            info=f"{snapshot.candidate_pairs_checked} pairs checked",
+        )
+        progress.update(
+            group_task,
+            total=max(snapshot.total_media, 1),
+            completed=snapshot.groups_found,
+            info=f"{snapshot.groups_found} groups, {snapshot.duplicate_files_found} dup files",
+        )
+
+    with Live(progress, console=console, refresh_per_second=8, transient=True):
+        return service.find_duplicates(
+            reset=reset,
+            max_distance=max_distance,
+            progress_callback=_progress_callback,
+        )
+
+
 def _capture_datetime_for_rename(path: Path) -> datetime:
     """Return capture date if available, otherwise filesystem modified time."""
     media_type = guess_media_type(path)
@@ -823,12 +980,6 @@ def rename(
     skipped: list[Path] = []
     planning_errors: list[tuple[Path, str]] = []
 
-    # Matches: YYYY-MM-DD_HHhMMmSSs.<ext> or YYYY-MM-DD_HHhMMmSSs_1.<ext> etc.
-    # When --include-faces is active it also accepts YYYY-MM-DD_HHhMMmSSs_Name.<ext>.
-    _RENAME_PATTERN = re.compile(
-        r"^\d{4}-\d{2}-\d{2}_\d{2}h\d{2}m\d{2}s(_[^/\\]+)?(_\d+)?\.[a-zA-Z0-9]+$"
-    )
-
     def _display_path(path: Path) -> str:
         """Return a short display path rooted at the library files folder."""
         try:
@@ -837,12 +988,16 @@ def rename(
         except ValueError:
             return str(path)
 
-    def _already_named_correctly(path: Path, target_dir: Path) -> bool:
-        """Return True if the file is already under the target directory and
-        its name already follows the rename output pattern."""
+    def _already_named_correctly(
+        path: Path, target_dir: Path, expected_base: str
+    ) -> bool:
+        """Return True if the file is already in *target_dir* and its stem
+        matches *expected_base* with an optional numeric suffix (_1, _2, ...).
+        """
         if target_dir.resolve() != path.parent.resolve():
             return False
-        return _RENAME_PATTERN.match(path.name) is not None
+        pattern = re.escape(expected_base) + r"(_\d+)?$"
+        return re.match(pattern, path.stem) is not None
 
     def _face_names_for(path: Path, checksum: str) -> list[str]:
         if not include_faces:
@@ -883,7 +1038,7 @@ def rename(
                 else:
                     target_dir = file_path.parent
 
-                if _already_named_correctly(file_path, target_dir):
+                if _already_named_correctly(file_path, target_dir, base):
                     skipped.append(file_path)
                     progress.advance(task)
                     continue

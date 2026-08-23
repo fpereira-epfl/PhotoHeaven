@@ -47,8 +47,30 @@ class _MediaFileORM(Base):
     face_analysis_at = Column(DateTime, nullable=True)
     face_analysis_version = Column(String, nullable=True)
     metadata_extracted = Column(Integer, nullable=False, default=1)
+    perceptual_hash = Column(String(64), nullable=True, index=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class _DuplicateGroupORM(Base):
+    __tablename__ = "duplicate_groups"
+
+    id = Column(String(36), primary_key=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class _DuplicateGroupMemberORM(Base):
+    __tablename__ = "duplicate_group_members"
+
+    group_id = Column(
+        String(36), ForeignKey("duplicate_groups.id"), primary_key=True
+    )
+    media_id = Column(
+        String(36), ForeignKey("media_files.id"), primary_key=True
+    )
+    is_primary = Column(Integer, nullable=False, default=0)
+    match_level = Column(String(16), nullable=False)
 
 
 class _IdentityORM(Base):
@@ -98,6 +120,7 @@ def _media_to_domain(row: _MediaFileORM) -> MediaFile:
         face_analysis_at=row.face_analysis_at,
         face_analysis_version=row.face_analysis_version,
         metadata_extracted=bool(row.metadata_extracted),
+        perceptual_hash=row.perceptual_hash,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -119,6 +142,7 @@ def _media_to_orm(media: MediaFile) -> _MediaFileORM:
         face_analysis_at=media.face_analysis_at,
         face_analysis_version=media.face_analysis_version,
         metadata_extracted=1 if media.metadata_extracted else 0,
+        perceptual_hash=media.perceptual_hash,
         created_at=media.created_at,
         updated_at=media.updated_at,
     )
@@ -189,6 +213,10 @@ def _maybe_backup_database(engine, inspector) -> None:
     will_migrate = False
     if not inspector.has_table("identities"):
         will_migrate = True
+    elif not inspector.has_table("duplicate_groups"):
+        will_migrate = True
+    elif not inspector.has_table("duplicate_group_members"):
+        will_migrate = True
     else:
         existing_faces = {col["name"] for col in inspector.get_columns("faces")}
         if "identity_id" not in existing_faces:
@@ -200,6 +228,7 @@ def _maybe_backup_database(engine, inspector) -> None:
             "face_analysis_at",
             "face_analysis_version",
             "metadata_extracted",
+            "perceptual_hash",
         ):
             if col_name not in existing_media:
                 will_migrate = True
@@ -312,6 +341,10 @@ def _migrate_schema(engine) -> None:
     _add_column_if_missing(
         "media_files",
         Column("metadata_extracted", Integer, nullable=False, default=1),
+    )
+    _add_column_if_missing(
+        "media_files",
+        Column("perceptual_hash", String(64), nullable=True),
     )
     _add_column_if_missing(
         "faces",
@@ -737,6 +770,107 @@ class SqliteMediaRepository(MediaRepository):
                 for row in rows
             ]
 
+    def update_media_perceptual_hash(
+        self, media_id: str, perceptual_hash: str
+    ) -> None:
+        with self._session() as session:
+            media = session.get(_MediaFileORM, media_id)
+            if media is None:
+                return
+            media.perceptual_hash = perceptual_hash
+            media.updated_at = datetime.utcnow()
+            session.commit()
+
+    def clear_duplicate_groups(self) -> None:
+        with self._session() as session:
+            session.query(_DuplicateGroupMemberORM).delete(
+                synchronize_session=False
+            )
+            session.query(_DuplicateGroupORM).delete(
+                synchronize_session=False
+            )
+            session.commit()
+
+    def save_duplicate_group(
+        self,
+        group_id: str,
+        members: list[dict],
+    ) -> None:
+        """Persist a duplicate group and its members.
+
+        *members* is a list of dicts with keys:
+        - ``media_id`` (str)
+        - ``is_primary`` (bool)
+        - ``match_level`` (str: metadata/checksum/perceptual)
+        """
+        with self._session() as session:
+            group = _DuplicateGroupORM(
+                id=group_id,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+            session.add(group)
+            for member in members:
+                session.add(
+                    _DuplicateGroupMemberORM(
+                        group_id=group_id,
+                        media_id=member["media_id"],
+                        is_primary=1 if member.get("is_primary") else 0,
+                        match_level=member["match_level"],
+                    )
+                )
+            session.commit()
+
+    def list_duplicate_groups(self) -> list[dict]:
+        """Return all duplicate groups with member details.
+
+        Each returned dict has keys:
+        - ``group_id`` (str)
+        - ``created_at`` (datetime)
+        - ``members`` (list of dicts with media_id, path, size_bytes,
+          is_primary, match_level)
+        """
+        with self._session() as session:
+            groups = (
+                session.query(_DuplicateGroupORM)
+                .order_by(_DuplicateGroupORM.created_at.desc())
+                .all()
+            )
+            result = []
+            for group in groups:
+                members = (
+                    session.query(
+                        _DuplicateGroupMemberORM.media_id,
+                        _DuplicateGroupMemberORM.is_primary,
+                        _DuplicateGroupMemberORM.match_level,
+                        _MediaFileORM.path,
+                        _MediaFileORM.size_bytes,
+                    )
+                    .join(
+                        _MediaFileORM,
+                        _DuplicateGroupMemberORM.media_id == _MediaFileORM.id,
+                    )
+                    .filter(_DuplicateGroupMemberORM.group_id == group.id)
+                    .all()
+                )
+                result.append(
+                    {
+                        "group_id": group.id,
+                        "created_at": group.created_at,
+                        "members": [
+                            {
+                                "media_id": row.media_id,
+                                "path": row.path,
+                                "size_bytes": row.size_bytes,
+                                "is_primary": bool(row.is_primary),
+                                "match_level": row.match_level,
+                            }
+                            for row in members
+                        ],
+                    }
+                )
+            return result
+
     def delete_media(self, media_id: str) -> None:
         with self._session() as session:
             media = session.get(_MediaFileORM, media_id)
@@ -745,6 +879,9 @@ class SqliteMediaRepository(MediaRepository):
             session.query(_FaceORM).filter_by(media_id=media_id).delete(
                 synchronize_session=False
             )
+            session.query(_DuplicateGroupMemberORM).filter_by(
+                media_id=media_id
+            ).delete(synchronize_session=False)
             session.delete(media)
             session.commit()
 

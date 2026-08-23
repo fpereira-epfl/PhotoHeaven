@@ -155,6 +155,22 @@ class FakeRepository(MediaRepository):
     def get_identity_photo_counts(self) -> dict[str, int]:
         return {}
 
+    def update_media_perceptual_hash(
+        self, media_id: str, perceptual_hash: str
+    ) -> None:
+        pass
+
+    def clear_duplicate_groups(self) -> None:
+        pass
+
+    def save_duplicate_group(
+        self, group_id: str, members: list[dict]
+    ) -> None:
+        pass
+
+    def list_duplicate_groups(self) -> list[dict]:
+        return []
+
 
 def _face(embedding: list[float]) -> Face:
     return Face(

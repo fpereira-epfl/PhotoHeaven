@@ -141,6 +141,24 @@ class FakeRepository(MediaRepository):
     def get_identity_photo_counts(self) -> dict[str, int]:
         return {}
 
+    def update_media_perceptual_hash(
+        self, media_id: str, perceptual_hash: str
+    ) -> None:
+        media = self.media.get(media_id)
+        if media is not None:
+            media.perceptual_hash = perceptual_hash
+
+    def clear_duplicate_groups(self) -> None:
+        pass
+
+    def save_duplicate_group(
+        self, group_id: str, members: list[dict]
+    ) -> None:
+        pass
+
+    def list_duplicate_groups(self) -> list[dict]:
+        return []
+
 
 class FailingMetadataExtractor(MetadataExtractor):
     """Always raises, simulating a corrupt/unreadable image."""

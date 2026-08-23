@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from photoheaven.application.face_identity_service import FaceIdentityService
+from photoheaven.application.face_identity_service import (
+    FaceIdentityService,
+    IdentitySummary,
+)
 from photoheaven.application.ports import MediaRepository
 from photoheaven.domain.models import Face, Identity
 
@@ -17,10 +20,12 @@ class FakeRepository(MediaRepository):
         summaries: list[dict] | None = None,
         sample_paths: dict[int, list[str]] | None = None,
         faces: dict[str, Face] | None = None,
+        identity_summaries: list[dict] | None = None,
     ) -> None:
         self.summaries = summaries or []
         self.sample_paths = sample_paths or {}
         self.faces = faces or {}
+        self.identity_summaries = identity_summaries or []
         self.identities: dict[str, Identity] = {}
         self.named: dict[int, str | None] = {}
 
@@ -148,6 +153,11 @@ class FakeRepository(MediaRepository):
     ) -> list[dict]:
         return self.summaries[offset : offset + limit]
 
+    def get_identity_summary(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[dict]:
+        return self.identity_summaries[offset : offset + limit]
+
 
 def test_list_clusters_returns_ordered_summaries() -> None:
     summaries = [
@@ -235,3 +245,35 @@ def test_get_sample_photos_returns_paths() -> None:
     paths = service.get_sample_photos(3, limit=2)
 
     assert paths == ["/a.jpg", "/b.jpg"]
+
+
+def test_list_identities_returns_ordered_summaries() -> None:
+    summaries = [
+        {
+            "identity_id": "id-1",
+            "identity_name": "Alice",
+            "face_count": 50,
+            "photo_count": 40,
+            "sample_path": "/photos/alice.jpg",
+        },
+        {
+            "identity_id": "id-2",
+            "identity_name": "Bob",
+            "face_count": 30,
+            "photo_count": 25,
+            "sample_path": "/photos/bob.jpg",
+        },
+    ]
+    repo = FakeRepository(identity_summaries=summaries)
+    service = FaceIdentityService(repo)
+
+    identities = service.list_identities()
+
+    assert len(identities) == 2
+    assert identities[0] == IdentitySummary(
+        identity_id="id-1",
+        identity_name="Alice",
+        face_count=50,
+        photo_count=40,
+        sample_path="/photos/alice.jpg",
+    )

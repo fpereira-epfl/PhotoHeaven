@@ -124,6 +124,11 @@ class FakeRepository(MediaRepository):
     ) -> list[dict]:
         return []
 
+    def get_identity_summary(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[dict]:
+        return []
+
 
 class FailingMetadataExtractor(MetadataExtractor):
     """Always raises, simulating a corrupt/unreadable image."""

@@ -223,6 +223,21 @@ class MediaRepository(ABC):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def get_identity_summary(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[dict]:
+        """Return a summary of identities ordered by distinct-photo count.
+
+        Each item is a dict with keys:
+        - ``identity_id`` (str)
+        - ``identity_name`` (str)
+        - ``face_count`` (int)
+        - ``photo_count`` (int)
+        - ``sample_path`` (str | None)
+        """
+        raise NotImplementedError
+
 
 class FaceAnalyzer(ABC):
     """Detects faces and computes embeddings for a media file."""

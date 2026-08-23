@@ -151,6 +151,11 @@ class FakeRepository(MediaRepository):
     ) -> list[dict]:
         return []
 
+    def get_identity_summary(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[dict]:
+        return []
+
 
 class FakeAnalyzer(FaceAnalyzer):
     """Stub face analyzer that returns configurable faces."""

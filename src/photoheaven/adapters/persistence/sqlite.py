@@ -559,3 +559,42 @@ class SqliteMediaRepository(MediaRepository):
                 }
                 for row in rows
             ]
+
+    def get_identity_summary(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[dict]:
+        with self._session() as session:
+            rows = (
+                session.query(
+                    _FaceORM.identity_id,
+                    func.max(_FaceORM.identity_name).label("identity_name"),
+                    func.count(_FaceORM.id).label("face_count"),
+                    func.count(func.distinct(_FaceORM.media_id)).label(
+                        "photo_count"
+                    ),
+                    func.min(_MediaFileORM.path).label("sample_path"),
+                )
+                .join(
+                    _MediaFileORM,
+                    _FaceORM.media_id == _MediaFileORM.id,
+                )
+                .filter(_FaceORM.identity_id.isnot(None))
+                .group_by(_FaceORM.identity_id)
+                .order_by(
+                    func.count(func.distinct(_FaceORM.media_id)).desc(),
+                    func.count(_FaceORM.id).desc(),
+                )
+                .offset(offset)
+                .limit(limit)
+                .all()
+            )
+            return [
+                {
+                    "identity_id": row.identity_id,
+                    "identity_name": row.identity_name,
+                    "face_count": row.face_count,
+                    "photo_count": row.photo_count,
+                    "sample_path": row.sample_path,
+                }
+                for row in rows
+            ]

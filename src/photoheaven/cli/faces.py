@@ -20,6 +20,7 @@ from photoheaven.application.face_detection_service import FaceDetectionService
 from photoheaven.application.face_identity_service import (
     ClusterSummary,
     FaceIdentityService,
+    IdentitySummary,
 )
 
 logger = logging.getLogger(__name__)
@@ -224,22 +225,59 @@ def _format_cluster_row(summary: ClusterSummary) -> tuple[str, ...]:
     )
 
 
+def _format_identity_row(summary: IdentitySummary) -> tuple[str, ...]:
+    sample = summary.sample_path or "—"
+    return (
+        summary.identity_name,
+        str(summary.photo_count),
+        str(summary.face_count),
+        sample,
+    )
+
+
 @faces_app.command("list")
 def list_clusters(
     db_path: str | None = typer.Option(
         None, "--db", help="Path to the SQLite library database."
     ),
     limit: int = typer.Option(
-        100, "--limit", "-l", help="Maximum number of clusters to show."
+        100, "--limit", "-l", help="Maximum number of rows to show."
     ),
     offset: int = typer.Option(
-        0, "--offset", "-o", help="Skip this many clusters."
+        0, "--offset", "-o", help="Skip this many rows."
+    ),
+    by_identity: bool = typer.Option(
+        False,
+        "--by-identity",
+        "-i",
+        help="Group results by persistent identity instead of cluster label.",
     ),
 ) -> None:
-    """List face clusters ordered by size."""
+    """List face clusters or identities ordered by size."""
     db = _get_db_path(db_path)
     repository = SqliteMediaRepository(db)
     service = FaceIdentityService(repository=repository)
+
+    if by_identity:
+        identities = service.list_identities(limit=limit, offset=offset)
+        if not identities:
+            console.print(
+                "[yellow]No named identities found. "
+                "Run 'ph faces name' or 'ph faces assign' first.[/yellow]"
+            )
+            raise typer.Exit(0)
+
+        table = Table(title=f"Identities (showing {len(identities)})")
+        table.add_column("Identity", style="green")
+        table.add_column("Photos", style="magenta", justify="right")
+        table.add_column("Faces", style="cyan", justify="right")
+        table.add_column("Sample file", style="blue", no_wrap=True)
+
+        for summary in identities:
+            table.add_row(*_format_identity_row(summary))
+
+        console.print(table)
+        return
 
     clusters = service.list_clusters(limit=limit, offset=offset)
 

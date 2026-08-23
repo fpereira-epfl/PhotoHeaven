@@ -133,6 +133,11 @@ class FakeRepository(MediaRepository):
     ) -> list[dict]:
         return []
 
+    def get_identity_summary(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[dict]:
+        return []
+
 
 def _face(embedding: list[float]) -> Face:
     return Face(

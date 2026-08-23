@@ -204,3 +204,31 @@ def test_get_faces_for_cluster_and_identity(tmp_path: Path) -> None:
     assert len(repo.get_faces_for_cluster(4)) == 0
     assert len(repo.get_faces_for_identity("identity-1")) == 1
     assert len(repo.get_faces_for_identity("identity-2")) == 0
+
+
+def test_get_identity_summary_counts_distinct_photos(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "test.db"
+    repo = SqliteMediaRepository(str(db_path))
+
+    media_a = _media("/photos/a.jpg")
+    media_b = _media("/photos/b.jpg")
+    repo.save_media(media_a)
+    repo.save_media(media_b)
+
+    face_a1 = _face(media_a.id)
+    face_a2 = _face(media_a.id)
+    face_b = _face(media_b.id)
+    for face in (face_a1, face_a2, face_b):
+        face.identity_id = "identity-1"
+        face.identity_name = "Alice"
+        repo.save_face(face)
+
+    summaries = repo.get_identity_summary(limit=10)
+
+    assert len(summaries) == 1
+    assert summaries[0]["identity_id"] == "identity-1"
+    assert summaries[0]["identity_name"] == "Alice"
+    assert summaries[0]["face_count"] == 3
+    assert summaries[0]["photo_count"] == 2

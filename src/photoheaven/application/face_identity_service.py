@@ -23,6 +23,17 @@ class ClusterSummary:
     sample_path: str | None
 
 
+@dataclass(frozen=True)
+class IdentitySummary:
+    """Human-readable summary of a named identity."""
+
+    identity_id: str
+    identity_name: str
+    face_count: int
+    photo_count: int
+    sample_path: str | None
+
+
 class FaceIdentityService:
     """List, name, and search face clusters without exposing embeddings."""
 
@@ -40,6 +51,24 @@ class FaceIdentityService:
                 face_count=row["face_count"],
                 photo_count=row["photo_count"],
                 identity_name=row["identity_name"],
+                sample_path=row["sample_path"],
+            )
+            for row in rows
+        ]
+
+    def list_identities(
+        self, *, limit: int = 100, offset: int = 0
+    ) -> list[IdentitySummary]:
+        """Return named identities ordered by distinct-photo count."""
+        rows = self.repository.get_identity_summary(
+            limit=limit, offset=offset
+        )
+        return [
+            IdentitySummary(
+                identity_id=row["identity_id"],
+                identity_name=row["identity_name"] or "—",
+                face_count=row["face_count"],
+                photo_count=row["photo_count"],
                 sample_path=row["sample_path"],
             )
             for row in rows

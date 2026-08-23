@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from photoheaven.domain.models import Face, GeoPoint, MediaFile, MediaType
+from photoheaven.domain.models import Face, GeoPoint, Identity, MediaFile, MediaType
 
 
 class Hasher(ABC):
@@ -143,6 +143,84 @@ class MediaRepository(ABC):
         self, cluster_label: int, identity_name: str | None
     ) -> None:
         """Assign an identity name to all faces in a cluster."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def save_identity(self, identity: Identity) -> None:
+        """Persist an identity (person)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_identity_by_name(self, name: str) -> Identity | None:
+        """Return an identity by its human-readable name."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_identity_by_id(self, identity_id: str) -> Identity | None:
+        """Return an identity by its unique id."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_identities(self, limit: int = 100, offset: int = 0) -> list[Identity]:
+        """Return a paginated list of identities."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_faces_for_cluster(self, cluster_label: int) -> list[Face]:
+        """Return all faces belonging to a cluster."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_faces_for_identity(self, identity_id: str) -> list[Face]:
+        """Return all faces linked to an identity."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_faces_without_identity(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[Face]:
+        """Return faces that are not yet linked to any identity."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_face_identity(
+        self,
+        face_id: str,
+        *,
+        identity_id: str | None,
+        identity_name: str | None,
+    ) -> None:
+        """Assign (or clear) the persistent identity for a single face."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_media_paths_for_cluster(
+        self,
+        cluster_label: int,
+        *,
+        limit: int = 10,
+        include_heic: bool = False,
+    ) -> list[str]:
+        """Return distinct media file paths for a cluster, randomly sampled.
+
+        By default only JPEG files are returned. Set ``include_heic`` to True
+        to also include HEIC files.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_cluster_summary(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[dict]:
+        """Return a summary of clusters ordered by distinct-photo count.
+
+        Each item is a dict with keys:
+        - ``cluster_label`` (int)
+        - ``face_count`` (int)
+        - ``photo_count`` (int)
+        - ``identity_name`` (str | None)
+        - ``sample_path`` (str | None)
+        """
         raise NotImplementedError
 
 

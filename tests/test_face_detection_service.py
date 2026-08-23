@@ -87,6 +87,70 @@ class FakeRepository(MediaRepository):
             if face.cluster_label == cluster_label:
                 face.identity_name = identity_name
 
+    def save_identity(self, identity) -> None:
+        pass
+
+    def get_identity_by_name(self, name: str):
+        return None
+
+    def get_identity_by_id(self, identity_id: str):
+        return None
+
+    def list_identities(self, limit: int = 100, offset: int = 0):
+        return []
+
+    def get_faces_for_cluster(self, cluster_label: int):
+        return [
+            face
+            for face in self.faces.values()
+            if face.cluster_label == cluster_label
+        ]
+
+    def get_faces_for_identity(self, identity_id: str):
+        return [
+            face
+            for face in self.faces.values()
+            if face.identity_id == identity_id
+        ]
+
+    def get_faces_without_identity(self, limit: int = 100, offset: int = 0):
+        return [
+            face
+            for face in self.faces.values()
+            if face.identity_id is None
+        ][offset : offset + limit]
+
+    def update_face_identity(
+        self,
+        face_id: str,
+        *,
+        identity_id: str | None,
+        identity_name: str | None,
+    ) -> None:
+        face = self.faces.get(face_id)
+        if face is not None:
+            face.identity_id = identity_id
+            face.identity_name = identity_name
+
+    def get_media_paths_for_cluster(
+        self,
+        cluster_label: int,
+        *,
+        limit: int = 10,
+        include_heic: bool = False,
+    ) -> list[str]:
+        paths = {
+            self.media[face.media_id].path
+            for face in self.faces.values()
+            if face.cluster_label == cluster_label and face.media_id in self.media
+        }
+        return list(paths)[:limit]
+
+    def get_cluster_summary(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[dict]:
+        return []
+
 
 class FakeAnalyzer(FaceAnalyzer):
     """Stub face analyzer that returns configurable faces."""

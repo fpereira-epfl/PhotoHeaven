@@ -80,6 +80,50 @@ class FakeRepository(MediaRepository):
     ) -> None:
         pass
 
+    def save_identity(self, identity) -> None:
+        pass
+
+    def get_identity_by_name(self, name: str):
+        return None
+
+    def get_identity_by_id(self, identity_id: str):
+        return None
+
+    def list_identities(self, limit: int = 100, offset: int = 0):
+        return []
+
+    def get_faces_for_cluster(self, cluster_label: int):
+        return []
+
+    def get_faces_for_identity(self, identity_id: str):
+        return []
+
+    def get_faces_without_identity(self, limit: int = 100, offset: int = 0):
+        return []
+
+    def update_face_identity(
+        self,
+        face_id: str,
+        *,
+        identity_id: str | None,
+        identity_name: str | None,
+    ) -> None:
+        pass
+
+    def get_media_paths_for_cluster(
+        self,
+        cluster_label: int,
+        *,
+        limit: int = 10,
+        include_heic: bool = False,
+    ) -> list[str]:
+        return []
+
+    def get_cluster_summary(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[dict]:
+        return []
+
 
 class FailingMetadataExtractor(MetadataExtractor):
     """Always raises, simulating a corrupt/unreadable image."""

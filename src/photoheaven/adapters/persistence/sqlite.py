@@ -16,11 +16,12 @@ from sqlalchemy import (
     LargeBinary,
     String,
     create_engine,
+    func,
 )
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 from photoheaven.application.ports import MediaRepository
-from photoheaven.domain.models import Face, GeoPoint, MediaFile, MediaType
+from photoheaven.domain.models import Face, GeoPoint, Identity, MediaFile, MediaType
 
 logger = logging.getLogger(__name__)
 Base = declarative_base()
@@ -47,6 +48,15 @@ class _MediaFileORM(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class _IdentityORM(Base):
+    __tablename__ = "identities"
+
+    id = Column(String(36), primary_key=True)
+    name = Column(String, nullable=False, unique=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class _FaceORM(Base):
     __tablename__ = "faces"
 
@@ -60,6 +70,9 @@ class _FaceORM(Base):
     embedding_version = Column(String, nullable=False, default="unknown")
     detection_confidence = Column(Float, nullable=False, default=0.0)
     cluster_label = Column(Integer, nullable=True)
+    identity_id = Column(
+        String(36), ForeignKey("identities.id"), nullable=True, index=True
+    )
     identity_name = Column(String, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
@@ -129,6 +142,7 @@ def _face_to_domain(row: _FaceORM) -> Face:
         embedding_version=row.embedding_version,
         detection_confidence=row.detection_confidence,
         cluster_label=row.cluster_label,
+        identity_id=row.identity_id,
         identity_name=row.identity_name,
         created_at=row.created_at,
     )
@@ -146,8 +160,18 @@ def _face_to_orm(face: Face) -> _FaceORM:
         embedding_version=face.embedding_version,
         detection_confidence=face.detection_confidence,
         cluster_label=face.cluster_label,
+        identity_id=face.identity_id,
         identity_name=face.identity_name,
         created_at=face.created_at,
+    )
+
+
+def _identity_to_domain(row: _IdentityORM) -> Identity:
+    return Identity(
+        id=row.id,
+        name=row.name,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
     )
 
 
@@ -193,6 +217,10 @@ def _migrate_schema(engine) -> None:
     _add_column_if_missing(
         "media_files",
         Column("metadata_extracted", Integer, nullable=False, default=1),
+    )
+    _add_column_if_missing(
+        "faces",
+        Column("identity_id", String(36), ForeignKey("identities.id"), nullable=True),
     )
 
 
@@ -285,6 +313,7 @@ class SqliteMediaRepository(MediaRepository):
                 existing.embedding_version = face.embedding_version
                 existing.detection_confidence = face.detection_confidence
                 existing.cluster_label = face.cluster_label
+                existing.identity_id = face.identity_id
                 existing.identity_name = face.identity_name
             else:
                 session.add(_face_to_orm(face))
@@ -377,3 +406,156 @@ class SqliteMediaRepository(MediaRepository):
                 .update({"identity_name": identity_name})
             )
             session.commit()
+
+    def save_identity(self, identity: Identity) -> None:
+        """Persist an identity, updating in place if it already exists."""
+        with self._session() as session:
+            existing = session.get(_IdentityORM, identity.id)
+            if existing:
+                existing.name = identity.name
+                existing.updated_at = identity.updated_at
+            else:
+                session.add(
+                    _IdentityORM(
+                        id=identity.id,
+                        name=identity.name,
+                        created_at=identity.created_at,
+                        updated_at=identity.updated_at,
+                    )
+                )
+            session.commit()
+
+    def get_identity_by_name(self, name: str) -> Identity | None:
+        with self._session() as session:
+            row = session.query(_IdentityORM).filter_by(name=name).first()
+            return _identity_to_domain(row) if row else None
+
+    def get_identity_by_id(self, identity_id: str) -> Identity | None:
+        with self._session() as session:
+            row = session.get(_IdentityORM, identity_id)
+            return _identity_to_domain(row) if row else None
+
+    def list_identities(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[Identity]:
+        with self._session() as session:
+            rows = (
+                session.query(_IdentityORM)
+                .order_by(_IdentityORM.name)
+                .offset(offset)
+                .limit(limit)
+                .all()
+            )
+            return [_identity_to_domain(row) for row in rows]
+
+    def get_faces_for_cluster(self, cluster_label: int) -> list[Face]:
+        with self._session() as session:
+            rows = (
+                session.query(_FaceORM)
+                .filter_by(cluster_label=cluster_label)
+                .all()
+            )
+            return [_face_to_domain(row) for row in rows]
+
+    def get_faces_for_identity(self, identity_id: str) -> list[Face]:
+        with self._session() as session:
+            rows = (
+                session.query(_FaceORM)
+                .filter_by(identity_id=identity_id)
+                .all()
+            )
+            return [_face_to_domain(row) for row in rows]
+
+    def get_faces_without_identity(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[Face]:
+        with self._session() as session:
+            rows = (
+                session.query(_FaceORM)
+                .filter(_FaceORM.identity_id.is_(None))
+                .order_by(_FaceORM.created_at)
+                .offset(offset)
+                .limit(limit)
+                .all()
+            )
+            return [_face_to_domain(row) for row in rows]
+
+    def update_face_identity(
+        self,
+        face_id: str,
+        *,
+        identity_id: str | None,
+        identity_name: str | None,
+    ) -> None:
+        with self._session() as session:
+            row = session.get(_FaceORM, face_id)
+            if row is None:
+                logger.warning(
+                    "Cannot update face identity: face %s not found", face_id
+                )
+                return
+            row.identity_id = identity_id
+            row.identity_name = identity_name
+            session.commit()
+
+    def get_media_paths_for_cluster(
+        self,
+        cluster_label: int,
+        *,
+        limit: int = 10,
+        include_heic: bool = False,
+    ) -> list[str]:
+        with self._session() as session:
+            query = (
+                session.query(_MediaFileORM.path)
+                .join(_FaceORM, _FaceORM.media_id == _MediaFileORM.id)
+                .filter(_FaceORM.cluster_label == cluster_label)
+            )
+            if not include_heic:
+                query = query.filter(
+                    _MediaFileORM.path.ilike("%.jpg")
+                    | _MediaFileORM.path.ilike("%.jpeg")
+                )
+            rows = (
+                query.distinct().order_by(func.random()).limit(limit).all()
+            )
+            return [row.path for row in rows]
+
+    def get_cluster_summary(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[dict]:
+        with self._session() as session:
+            rows = (
+                session.query(
+                    _FaceORM.cluster_label,
+                    func.count(_FaceORM.id).label("face_count"),
+                    func.count(func.distinct(_FaceORM.media_id)).label(
+                        "photo_count"
+                    ),
+                    func.max(_FaceORM.identity_name).label("identity_name"),
+                    func.min(_MediaFileORM.path).label("sample_path"),
+                )
+                .join(
+                    _MediaFileORM,
+                    _FaceORM.media_id == _MediaFileORM.id,
+                )
+                .filter(_FaceORM.cluster_label.isnot(None))
+                .group_by(_FaceORM.cluster_label)
+                .order_by(
+                    func.count(func.distinct(_FaceORM.media_id)).desc(),
+                    func.count(_FaceORM.id).desc(),
+                )
+                .offset(offset)
+                .limit(limit)
+                .all()
+            )
+            return [
+                {
+                    "cluster_label": row.cluster_label,
+                    "face_count": row.face_count,
+                    "photo_count": row.photo_count,
+                    "identity_name": row.identity_name,
+                    "sample_path": row.sample_path,
+                }
+                for row in rows
+            ]

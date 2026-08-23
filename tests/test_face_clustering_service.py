@@ -70,6 +70,65 @@ class FakeRepository(MediaRepository):
     ) -> None:
         pass
 
+    def save_identity(self, identity) -> None:
+        pass
+
+    def get_identity_by_name(self, name: str):
+        return None
+
+    def get_identity_by_id(self, identity_id: str):
+        return None
+
+    def list_identities(self, limit: int = 100, offset: int = 0):
+        return []
+
+    def get_faces_for_cluster(self, cluster_label: int):
+        return [
+            face
+            for face in self.faces.values()
+            if face.cluster_label == cluster_label
+        ]
+
+    def get_faces_for_identity(self, identity_id: str):
+        return [
+            face
+            for face in self.faces.values()
+            if face.identity_id == identity_id
+        ]
+
+    def get_faces_without_identity(self, limit: int = 100, offset: int = 0):
+        return [
+            face
+            for face in self.faces.values()
+            if face.identity_id is None
+        ][offset : offset + limit]
+
+    def update_face_identity(
+        self,
+        face_id: str,
+        *,
+        identity_id: str | None,
+        identity_name: str | None,
+    ) -> None:
+        face = self.faces.get(face_id)
+        if face is not None:
+            face.identity_id = identity_id
+            face.identity_name = identity_name
+
+    def get_media_paths_for_cluster(
+        self,
+        cluster_label: int,
+        *,
+        limit: int = 10,
+        include_heic: bool = False,
+    ) -> list[str]:
+        return []
+
+    def get_cluster_summary(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[dict]:
+        return []
+
 
 def _face(embedding: list[float]) -> Face:
     return Face(
@@ -100,6 +159,49 @@ def test_cluster_groups_similar_faces() -> None:
     assert result.num_clusters == 2
     assert result.clustered_faces == 5
     assert result.noise_faces == 1
+
+
+def test_cluster_propagates_identity_to_new_cluster_label() -> None:
+    repo = FakeRepository()
+    # Existing named cluster with three faces.
+    for _ in range(3):
+        face = _face([1.0, 0.0, 0.0])
+        face.identity_id = "identity-alice"
+        face.identity_name = "Alice"
+        repo.save_face(face)
+    # New, similar face without a name.
+    repo.save_face(_face([1.0, 0.0, 0.0]))
+
+    service = FaceClusteringService(repo)
+    result = service.cluster(eps=0.1, min_samples=2)
+
+    assert result.num_clusters == 1
+    for face in repo.faces.values():
+        assert face.cluster_label == 0
+        assert face.identity_id == "identity-alice"
+        assert face.identity_name == "Alice"
+
+
+def test_cluster_migrates_legacy_name_only_faces() -> None:
+    repo = FakeRepository()
+    for _ in range(2):
+        face = _face([1.0, 0.0, 0.0])
+        # Simulate pre-identity-table rows: name set, identity_id absent.
+        face.identity_name = "Alice"
+        face.identity_id = None
+        repo.save_face(face)
+
+    service = FaceClusteringService(repo)
+    result = service.cluster(eps=0.1, min_samples=2)
+
+    assert result.num_clusters == 1
+    identities = {
+        (face.identity_id, face.identity_name) for face in repo.faces.values()
+    }
+    assert len(identities) == 1
+    identity_id, identity_name = identities.pop()
+    assert identity_name == "Alice"
+    assert identity_id is not None
 
 
 def test_empty_library_returns_zero_summary() -> None:

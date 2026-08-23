@@ -12,8 +12,15 @@ from rich.table import Table
 
 from photoheaven.adapters.face.insightface import InsightFaceAnalyzer
 from photoheaven.adapters.persistence.sqlite import SqliteMediaRepository
+from photoheaven.application.face_assignment_service import (
+    FaceAssignmentService,
+)
 from photoheaven.application.face_clustering_service import FaceClusteringService
 from photoheaven.application.face_detection_service import FaceDetectionService
+from photoheaven.application.face_identity_service import (
+    ClusterSummary,
+    FaceIdentityService,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -157,4 +164,171 @@ def cluster(
     table.add_row("Clusters", str(result.num_clusters))
     table.add_row("Clustered faces", str(result.clustered_faces))
     table.add_row("Noise / unclustered", str(result.noise_faces))
+    console.print(table)
+
+
+@faces_app.command()
+def assign(
+    db_path: str | None = typer.Option(
+        None, "--db", help="Path to the SQLite library database."
+    ),
+    eps: float = typer.Option(
+        0.4,
+        "--eps",
+        help="Maximum cosine distance to a known identity centroid for assignment.",
+    ),
+    batch_size: int = typer.Option(
+        1000,
+        "--batch-size",
+        help="Number of unassigned faces to fetch per query.",
+    ),
+) -> None:
+    """Assign unlabelled faces to known identities using centroid distance."""
+    db = _get_db_path(db_path)
+    repository = SqliteMediaRepository(db)
+    service = FaceAssignmentService(repository=repository)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("Assigning faces to identities...", total=None)
+        try:
+            result = service.assign(eps=eps, batch_size=batch_size)
+        except Exception as exc:
+            progress.remove_task(task)
+            logger.exception("Face assignment failed")
+            console.print(f"[red]Face assignment failed:[/red] {exc}")
+            raise typer.Exit(1) from exc
+        progress.remove_task(task)
+
+    table = Table(title="Incremental identity assignment summary")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Count", justify="right", style="magenta")
+    table.add_row("Named identities used", str(result.identities_used))
+    table.add_row("Faces assigned", str(result.assigned_faces))
+    table.add_row("Faces left unassigned", str(result.unassigned_faces))
+    console.print(table)
+
+
+def _format_cluster_row(summary: ClusterSummary) -> tuple[str, ...]:
+    identity = summary.identity_name or "—"
+    sample = summary.sample_path or "—"
+    return (
+        str(summary.cluster_label),
+        str(summary.photo_count),
+        identity,
+        sample,
+    )
+
+
+@faces_app.command("list")
+def list_clusters(
+    db_path: str | None = typer.Option(
+        None, "--db", help="Path to the SQLite library database."
+    ),
+    limit: int = typer.Option(
+        100, "--limit", "-l", help="Maximum number of clusters to show."
+    ),
+    offset: int = typer.Option(
+        0, "--offset", "-o", help="Skip this many clusters."
+    ),
+) -> None:
+    """List face clusters ordered by size."""
+    db = _get_db_path(db_path)
+    repository = SqliteMediaRepository(db)
+    service = FaceIdentityService(repository=repository)
+
+    clusters = service.list_clusters(limit=limit, offset=offset)
+
+    if not clusters:
+        console.print("[yellow]No clusters found. Run 'ph faces cluster' first.[/yellow]")
+        raise typer.Exit(0)
+
+    table = Table(title=f"Face IDs (showing {len(clusters)})")
+    table.add_column("Face ID", style="cyan", justify="right")
+    table.add_column(
+        "Photos", style="magenta", justify="right"
+    )
+    table.add_column("Identity", style="green")
+    table.add_column("Sample file", style="blue", no_wrap=True)
+
+    for summary in clusters:
+        table.add_row(*_format_cluster_row(summary))
+
+    console.print(table)
+
+
+@faces_app.command()
+def name(
+    cluster_label: int = typer.Argument(..., help="Cluster label to name."),
+    identity_name: str = typer.Argument(..., help="Human name for the cluster."),
+    db_path: str | None = typer.Option(
+        None, "--db", help="Path to the SQLite library database."
+    ),
+) -> None:
+    """Assign a human name to a face cluster."""
+    db = _get_db_path(db_path)
+    repository = SqliteMediaRepository(db)
+    service = FaceIdentityService(repository=repository)
+
+    try:
+        updated = service.name_cluster(cluster_label, identity_name)
+    except Exception as exc:
+        logger.exception("Failed to name cluster %d", cluster_label)
+        console.print(f"[red]Failed to name cluster:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    console.print(
+        f"Named cluster [cyan]{cluster_label}[/cyan] as "
+        f"[green]{identity_name}[/green] "
+        f"([magenta]{updated}[/magenta] face(s))."
+    )
+
+
+@faces_app.command()
+def samples(
+    face_id: int = typer.Argument(..., help="Face ID (cluster label) to sample."),
+    limit: int = typer.Option(
+        10, "--limit", "-n", help="Number of random sample photos to show."
+    ),
+    include_heic: bool = typer.Option(
+        False,
+        "--include-heic",
+        "-ih",
+        help="Also include HEIC sample photos (JPEGs are always shown).",
+    ),
+    db_path: str | None = typer.Option(
+        None, "--db", help="Path to the SQLite library database."
+    ),
+) -> None:
+    """Show random sample JPEG photos for a face ID."""
+    db = _get_db_path(db_path)
+    repository = SqliteMediaRepository(db)
+    service = FaceIdentityService(repository=repository)
+
+    try:
+        paths = service.get_sample_photos(
+            face_id, limit=limit, include_heic=include_heic
+        )
+    except Exception as exc:
+        logger.exception("Failed to load samples for face %d", face_id)
+        console.print(f"[red]Failed to load samples:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    if not paths:
+        console.print(
+            f"[yellow]No JPEG photos found for face ID {face_id}.[/yellow]"
+        )
+        raise typer.Exit(0)
+
+    table = Table(title=f"Sample JPEG photos for face ID {face_id}")
+    table.add_column("#", style="cyan", justify="right")
+    table.add_column("Path", style="blue", no_wrap=True)
+
+    for i, path in enumerate(paths, start=1):
+        table.add_row(str(i), path)
+
     console.print(table)

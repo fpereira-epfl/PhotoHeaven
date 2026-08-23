@@ -55,6 +55,16 @@ class MediaFile:
 
 
 @dataclass
+class Identity:
+    """A persistent identity (person) in the library."""
+
+    id: str
+    name: str
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass
 class Face:
     """A face detected in a media file."""
 
@@ -71,5 +81,10 @@ class Face:
 
     detection_confidence: float = 0.0
     cluster_label: int | None = None
+    identity_id: str | None = None
+    """Persistent identity id; survives re-clustering."""
+
     identity_name: str | None = None
+    """Denormalised display name for convenience."""
+
     created_at: datetime = field(default_factory=datetime.utcnow)

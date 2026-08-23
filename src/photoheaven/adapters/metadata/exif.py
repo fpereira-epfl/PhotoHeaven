@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -95,8 +96,15 @@ class PillowExifExtractor(MetadataExtractor):
 
     def extract(self, path: Path, media_type: MediaType) -> MediaMetadata:
         try:
-            with Image.open(path) as img:
-                exif = self._read_exif(img)
+            with warnings.catch_warnings(record=True) as captured:
+                warnings.simplefilter("always")
+                with Image.open(path) as img:
+                    exif = self._read_exif(img)
+
+                for warning in captured:
+                    logger.warning(
+                        "Pillow warning for %s: %s", path, warning.message
+                    )
 
                 capture_datetime = _extract_exif_datetime(exif)
                 make = exif.get("Make")

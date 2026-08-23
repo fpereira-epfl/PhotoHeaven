@@ -123,6 +123,15 @@ class MediaRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def get_all_faces(self) -> list[Face]:
+        """Return all faces with embeddings.
+
+        This is intended for clustering and may load a large result set into
+        memory. Callers should use ``list_faces`` for UI pagination.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def update_face_cluster_label(
         self, face_id: str, cluster_label: int | None
     ) -> None:

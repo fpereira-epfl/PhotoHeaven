@@ -351,6 +351,11 @@ class SqliteMediaRepository(MediaRepository):
             )
             return [_face_to_domain(row) for row in rows]
 
+    def get_all_faces(self) -> list[Face]:
+        with self._session() as session:
+            rows = session.query(_FaceORM).all()
+            return [_face_to_domain(row) for row in rows]
+
     def update_face_cluster_label(
         self, face_id: str, cluster_label: int | None
     ) -> None:

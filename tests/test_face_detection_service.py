@@ -70,6 +70,9 @@ class FakeRepository(MediaRepository):
     def list_faces(self, limit: int = 100, offset: int = 0) -> list[Face]:
         return list(self.faces.values())[offset : offset + limit]
 
+    def get_all_faces(self) -> list[Face]:
+        return list(self.faces.values())
+
     def update_face_cluster_label(
         self, face_id: str, cluster_label: int | None
     ) -> None:

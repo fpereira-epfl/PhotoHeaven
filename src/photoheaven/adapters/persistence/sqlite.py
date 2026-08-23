@@ -609,6 +609,39 @@ class SqliteMediaRepository(MediaRepository):
             row.identity_name = identity_name
             session.commit()
 
+    def _random_jpeg_sample(
+        self, session, query_filter
+    ) -> str | None:
+        """Return one random JPEG path matching *query_filter*, or None."""
+        query = (
+            session.query(_MediaFileORM.path)
+            .join(_FaceORM, _FaceORM.media_id == _MediaFileORM.id)
+            .filter(query_filter)
+            .filter(
+                _MediaFileORM.path.ilike("%.jpg")
+                | _MediaFileORM.path.ilike("%.jpeg")
+            )
+            .distinct()
+            .order_by(func.random())
+            .limit(1)
+        )
+        row = query.first()
+        return row.path if row is not None else None
+
+    def _random_jpeg_sample_for_cluster(
+        self, session, cluster_label: int
+    ) -> str | None:
+        return self._random_jpeg_sample(
+            session, _FaceORM.cluster_label == cluster_label
+        )
+
+    def _random_jpeg_sample_for_identity(
+        self, session, identity_id: str
+    ) -> str | None:
+        return self._random_jpeg_sample(
+            session, _FaceORM.identity_id == identity_id
+        )
+
     def get_media_paths_for_cluster(
         self,
         cluster_label: int,
@@ -644,11 +677,6 @@ class SqliteMediaRepository(MediaRepository):
                         "photo_count"
                     ),
                     func.max(_FaceORM.identity_name).label("identity_name"),
-                    func.min(_MediaFileORM.path).label("sample_path"),
-                )
-                .join(
-                    _MediaFileORM,
-                    _FaceORM.media_id == _MediaFileORM.id,
                 )
                 .filter(_FaceORM.cluster_label.isnot(None))
                 .group_by(_FaceORM.cluster_label)
@@ -666,7 +694,9 @@ class SqliteMediaRepository(MediaRepository):
                     "face_count": row.face_count,
                     "photo_count": row.photo_count,
                     "identity_name": row.identity_name,
-                    "sample_path": row.sample_path,
+                    "sample_path": self._random_jpeg_sample_for_cluster(
+                        session, row.cluster_label
+                    ),
                 }
                 for row in rows
             ]
@@ -683,11 +713,6 @@ class SqliteMediaRepository(MediaRepository):
                     func.count(func.distinct(_FaceORM.media_id)).label(
                         "photo_count"
                     ),
-                    func.min(_MediaFileORM.path).label("sample_path"),
-                )
-                .join(
-                    _MediaFileORM,
-                    _FaceORM.media_id == _MediaFileORM.id,
                 )
                 .filter(_FaceORM.identity_id.isnot(None))
                 .group_by(_FaceORM.identity_id)
@@ -705,7 +730,9 @@ class SqliteMediaRepository(MediaRepository):
                     "identity_name": row.identity_name,
                     "face_count": row.face_count,
                     "photo_count": row.photo_count,
-                    "sample_path": row.sample_path,
+                    "sample_path": self._random_jpeg_sample_for_identity(
+                        session, row.identity_id
+                    ),
                 }
                 for row in rows
             ]

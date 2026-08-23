@@ -93,18 +93,24 @@ def test_rename_skips_files_already_named_correctly(tmp_path: Path) -> None:
     db_path.parent.mkdir(parents=True)
     SqliteMediaRepository(str(db_path))
 
-    correctly_named = library / "files" / "2024-05-01_12h30m45s.jpg"
-    correctly_named.parent.mkdir(parents=True)
-    correctly_named.write_bytes(b"not an image")
-    expected_mtime = datetime(2024, 5, 1, 12, 30, 45).timestamp()
-    os.utime(correctly_named, (expected_mtime, expected_mtime))
+    base_mtime = datetime(2024, 5, 1, 12, 30, 45).timestamp()
+    names = [
+        "2024-05-01_12h30m45s.jpg",
+        "2024-05-01_12h30m45s_1.jpg",
+        "2024-05-01_12h30m45s_2.jpg",
+    ]
+    for name in names:
+        path = library / "files" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"not an image")
+        os.utime(path, (base_mtime, base_mtime))
 
     cli_config.state["library"] = str(library)
     result = runner.invoke(app, ["rename", "--dry-run"])
     cli_config.state["library"] = None
 
     assert result.exit_code == 0
-    assert "skipped │     1" in result.output
+    assert "skipped │     3" in result.output
     assert "renamed │     0" in result.output
 
 

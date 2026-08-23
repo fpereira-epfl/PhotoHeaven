@@ -823,6 +823,12 @@ def rename(
     skipped: list[Path] = []
     planning_errors: list[tuple[Path, str]] = []
 
+    # Matches: YYYY-MM-DD_HHhMMmSSs.<ext> or YYYY-MM-DD_HHhMMmSSs_1.<ext> etc.
+    # When --include-faces is active it also accepts YYYY-MM-DD_HHhMMmSSs_Name.<ext>.
+    _RENAME_PATTERN = re.compile(
+        r"^\d{4}-\d{2}-\d{2}_\d{2}h\d{2}m\d{2}s(_[^/\\]+)?(_\d+)?\.[a-zA-Z0-9]+$"
+    )
+
     def _display_path(path: Path) -> str:
         """Return a short display path rooted at the library files folder."""
         try:
@@ -830,6 +836,13 @@ def rename(
             return f"$/{relative}"
         except ValueError:
             return str(path)
+
+    def _already_named_correctly(path: Path, target_dir: Path) -> bool:
+        """Return True if the file is already under the target directory and
+        its name already follows the rename output pattern."""
+        if target_dir.resolve() != path.parent.resolve():
+            return False
+        return _RENAME_PATTERN.match(path.name) is not None
 
     def _face_names_for(path: Path, checksum: str) -> list[str]:
         if not include_faces:
@@ -870,8 +883,7 @@ def rename(
                 else:
                     target_dir = file_path.parent
 
-                ideal_target = target_dir / f"{base}{ext}"
-                if ideal_target.resolve() == file_path.resolve():
+                if _already_named_correctly(file_path, target_dir):
                     skipped.append(file_path)
                     progress.advance(task)
                     continue

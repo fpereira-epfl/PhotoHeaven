@@ -206,6 +206,30 @@ def test_get_faces_for_cluster_and_identity(tmp_path: Path) -> None:
     assert len(repo.get_faces_for_identity("identity-2")) == 0
 
 
+def test_migration_backfills_legacy_identity_names(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+
+    # Create an initial repository, save a face with a legacy name-only row.
+    repo = SqliteMediaRepository(str(db_path))
+    media = _media("/photos/face.jpg")
+    repo.save_media(media)
+    face = _face(media.id)
+    face.identity_name = "LegacyName"
+    face.identity_id = None
+    repo.save_face(face)
+
+    # Re-opening the repository triggers the migration/backfill.
+    repo2 = SqliteMediaRepository(str(db_path))
+    reloaded = repo2.get_face_by_id(face.id)
+    assert reloaded is not None
+    assert reloaded.identity_name == "LegacyName"
+    assert reloaded.identity_id is not None
+
+    identity = repo2.get_identity_by_name("LegacyName")
+    assert identity is not None
+    assert identity.id == reloaded.identity_id
+
+
 def test_get_identity_summary_counts_distinct_photos(
     tmp_path: Path,
 ) -> None:

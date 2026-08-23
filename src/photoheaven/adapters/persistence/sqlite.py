@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import array
 import logging
+import uuid
 from datetime import datetime
 from typing import Optional
 
@@ -175,12 +176,60 @@ def _identity_to_domain(row: _IdentityORM) -> Identity:
     )
 
 
+def _backfill_legacy_identity_names(engine) -> None:
+    """Convert pre-identity-table name-only rows into persistent identities."""
+    from sqlalchemy.orm import sessionmaker
+
+    session_factory = sessionmaker(engine)
+    with session_factory() as session:
+        names = [
+            row[0]
+            for row in session.query(_FaceORM.identity_name)
+            .filter(_FaceORM.identity_name.isnot(None))
+            .filter(_FaceORM.identity_id.is_(None))
+            .distinct()
+            .all()
+        ]
+        if not names:
+            return
+
+        logger.info(
+            "Backfilling %d legacy identity name(s) into identities table",
+            len(names),
+        )
+        for name in names:
+            existing = (
+                session.query(_IdentityORM).filter_by(name=name).first()
+            )
+            if existing is None:
+                identity = _IdentityORM(
+                    id=str(uuid.uuid4()),
+                    name=name,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                )
+                session.add(identity)
+                session.flush()
+                identity_id = identity.id
+            else:
+                identity_id = existing.id
+
+            (
+                session.query(_FaceORM)
+                .filter(_FaceORM.identity_name == name)
+                .filter(_FaceORM.identity_id.is_(None))
+                .update({"identity_id": identity_id})
+            )
+        session.commit()
+
+
 def _migrate_schema(engine) -> None:
-    """Add any columns that are missing from an older database file.
+    """Add any columns/tables that are missing from an older database file.
 
     SQLAlchemy's ``create_all`` creates missing tables but does not alter
     existing ones. This helper performs lightweight ``ALTER TABLE`` additions
-    for columns introduced after the initial schema.
+    for columns introduced after the initial schema, then backfills legacy
+    data where needed.
     """
     from sqlalchemy import inspect
 
@@ -222,6 +271,8 @@ def _migrate_schema(engine) -> None:
         "faces",
         Column("identity_id", String(36), ForeignKey("identities.id"), nullable=True),
     )
+
+    _backfill_legacy_identity_names(engine)
 
 
 class SqliteMediaRepository(MediaRepository):

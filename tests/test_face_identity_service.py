@@ -169,6 +169,12 @@ class FakeRepository(MediaRepository):
     ) -> list[dict]:
         return self.identity_summaries[offset : offset + limit]
 
+    def delete_media(self, media_id: str) -> None:
+        pass
+
+    def get_identity_photo_counts(self) -> dict[str, int]:
+        return {}
+
 
 def test_list_clusters_returns_ordered_summaries() -> None:
     summaries = [

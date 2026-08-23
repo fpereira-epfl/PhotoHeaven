@@ -18,6 +18,7 @@ from sqlalchemy import (
     LargeBinary,
     String,
     create_engine,
+    distinct,
     func,
 )
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
@@ -708,3 +709,27 @@ class SqliteMediaRepository(MediaRepository):
                 }
                 for row in rows
             ]
+
+    def delete_media(self, media_id: str) -> None:
+        with self._session() as session:
+            media = session.get(_MediaFileORM, media_id)
+            if media is None:
+                return
+            session.query(_FaceORM).filter_by(media_id=media_id).delete(
+                synchronize_session=False
+            )
+            session.delete(media)
+            session.commit()
+
+    def get_identity_photo_counts(self) -> dict[str, int]:
+        with self._session() as session:
+            rows = (
+                session.query(
+                    _FaceORM.identity_name,
+                    func.count(distinct(_FaceORM.media_id)).label("photo_count"),
+                )
+                .filter(_FaceORM.identity_name.isnot(None))
+                .group_by(_FaceORM.identity_name)
+                .all()
+            )
+            return {row.identity_name: row.photo_count for row in rows}

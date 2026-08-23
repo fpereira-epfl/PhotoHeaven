@@ -135,6 +135,12 @@ class FakeRepository(MediaRepository):
     ) -> list[dict]:
         return []
 
+    def delete_media(self, media_id: str) -> None:
+        self.media.pop(media_id, None)
+
+    def get_identity_photo_counts(self) -> dict[str, int]:
+        return {}
+
 
 class FailingMetadataExtractor(MetadataExtractor):
     """Always raises, simulating a corrupt/unreadable image."""

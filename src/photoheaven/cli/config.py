@@ -16,7 +16,7 @@ def resolve_db_path(db_path: str | None) -> str:
     """Return the database path to use.
 
     Priority:
-    1. Explicit ``--db`` value.
+    1. Explicit ``db_path`` value (programmatic override).
     2. ``--library`` global option or ``PHOTOHEAVEN_LIBRARY`` env var.
     3. Default ``<cwd>/db/photoheaven.db``.
     """
@@ -39,6 +39,14 @@ def resolve_library_package(db_path: str) -> str:
     if path.name == DB_NAME and path.parent.name == DB_DIR:
         return str(path.parent.parent)
     return str(path.parent)
+
+
+def resolve_library_files_root() -> Path | None:
+    """Return ``<library>/files`` when a library has been configured."""
+    library = state.get("library")
+    if library:
+        return Path(library).expanduser().resolve() / FILES_DIR
+    return None
 
 
 def resolve_photo_root(paths: list[str]) -> str | None:

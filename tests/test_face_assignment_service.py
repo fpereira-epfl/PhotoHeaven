@@ -149,6 +149,12 @@ class FakeRepository(MediaRepository):
     ) -> list[dict]:
         return []
 
+    def delete_media(self, media_id: str) -> None:
+        pass
+
+    def get_identity_photo_counts(self) -> dict[str, int]:
+        return {}
+
 
 def _face(embedding: list[float]) -> Face:
     return Face(

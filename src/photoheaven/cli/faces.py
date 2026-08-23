@@ -34,19 +34,23 @@ faces_app = typer.Typer(
 console = Console()
 
 
-def _get_db_path(db_path: str | None) -> str:
-    resolved = cli_config.resolve_db_path(db_path)
+def _get_db_path() -> str:
+    if not cli_config.state.get("library"):
+        console.print(
+            "[red]PHOTOHEAVEN_LIBRARY is not set. Use "
+            "`export PHOTOHEAVEN_LIBRARY=<path>` or pass "
+            "`--library <path>` before the command.[/red]"
+        )
+        raise typer.Exit(1)
+    resolved = cli_config.resolve_db_path(None)
     Path(resolved).parent.mkdir(parents=True, exist_ok=True)
     return resolved
 
 
 @faces_app.command()
 def detect(
-    db_path: str | None = typer.Option(
-        None, "--db", help="Path to the SQLite library database."
-    ),
     force: bool = typer.Option(
-        False, "--force", "-f", help="Re-analyse media even if already processed."
+        False, "--force", help="Re-analyse media even if already processed."
     ),
     det_size: int = typer.Option(
         640, "--det-size", help="InsightFace detector input size (e.g. 320 or 640)."
@@ -63,7 +67,7 @@ def detect(
     ),
 ) -> None:
     """Run face detection on unprocessed images in the library."""
-    db = _get_db_path(db_path)
+    db = _get_db_path()
     repository = SqliteMediaRepository(db)
 
     try:
@@ -87,8 +91,6 @@ def detect(
         console=console,
         transient=True,
     ) as progress:
-        # The service reports progress internally via logging; the spinner
-        # simply shows that work is happening.
         task = progress.add_task("Detecting faces...", total=None)
         result = service.detect(
             force=force,
@@ -112,9 +114,6 @@ def detect(
 
 @faces_app.command()
 def cluster(
-    db_path: str | None = typer.Option(
-        None, "--db", help="Path to the SQLite library database."
-    ),
     eps: float = typer.Option(
         0.4,
         "--eps",
@@ -132,7 +131,7 @@ def cluster(
     ),
 ) -> None:
     """Cluster detected faces into identity groups."""
-    db = _get_db_path(db_path)
+    db = _get_db_path()
     repository = SqliteMediaRepository(db)
     service = FaceClusteringService(repository=repository)
 
@@ -168,9 +167,6 @@ def cluster(
 
 @faces_app.command()
 def assign(
-    db_path: str | None = typer.Option(
-        None, "--db", help="Path to the SQLite library database."
-    ),
     eps: float = typer.Option(
         0.4,
         "--eps",
@@ -183,7 +179,7 @@ def assign(
     ),
 ) -> None:
     """Assign unlabelled faces to known identities using centroid distance."""
-    db = _get_db_path(db_path)
+    db = _get_db_path()
     repository = SqliteMediaRepository(db)
     service = FaceAssignmentService(repository=repository)
 
@@ -235,14 +231,11 @@ def _format_identity_row(summary: IdentitySummary) -> tuple[str, ...]:
 
 @faces_app.command("list")
 def list_clusters(
-    db_path: str | None = typer.Option(
-        None, "--db", help="Path to the SQLite library database."
-    ),
     limit: int = typer.Option(
         100, "--limit", "-l", help="Maximum number of rows to show."
     ),
     offset: int = typer.Option(
-        0, "--offset", "-o", help="Skip this many rows."
+        0, "--offset", help="Skip this many rows."
     ),
     by_identity: bool = typer.Option(
         False,
@@ -252,7 +245,7 @@ def list_clusters(
     ),
 ) -> None:
     """List face clusters or identities ordered by size."""
-    db = _get_db_path(db_path)
+    db = _get_db_path()
     repository = SqliteMediaRepository(db)
     service = FaceIdentityService(repository=repository)
 
@@ -301,12 +294,9 @@ def list_clusters(
 def name(
     cluster_label: int = typer.Argument(..., help="Cluster label to name."),
     identity_name: str = typer.Argument(..., help="Human name for the cluster."),
-    db_path: str | None = typer.Option(
-        None, "--db", help="Path to the SQLite library database."
-    ),
 ) -> None:
     """Assign a human name to a face cluster."""
-    db = _get_db_path(db_path)
+    db = _get_db_path()
     repository = SqliteMediaRepository(db)
     service = FaceIdentityService(repository=repository)
 
@@ -331,7 +321,7 @@ def name(
 def samples(
     face_id: int = typer.Argument(..., help="Face ID (cluster label) to sample."),
     limit: int = typer.Option(
-        10, "--limit", "-n", help="Number of random sample photos to show."
+        10, "--limit", help="Number of random sample photos to show."
     ),
     include_heic: bool = typer.Option(
         False,
@@ -339,12 +329,9 @@ def samples(
         "-ih",
         help="Also include HEIC sample photos (JPEGs are always shown).",
     ),
-    db_path: str | None = typer.Option(
-        None, "--db", help="Path to the SQLite library database."
-    ),
 ) -> None:
     """Show random sample JPEG photos for a face ID."""
-    db = _get_db_path(db_path)
+    db = _get_db_path()
     repository = SqliteMediaRepository(db)
     service = FaceIdentityService(repository=repository)
 

@@ -252,6 +252,16 @@ class MediaRepository(ABC):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def delete_media(self, media_id: str) -> None:
+        """Delete a media file record and its linked faces."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_identity_photo_counts(self) -> dict[str, int]:
+        """Return a mapping of identity name to distinct-photo count."""
+        raise NotImplementedError
+
 
 class FaceAnalyzer(ABC):
     """Detects faces and computes embeddings for a media file."""

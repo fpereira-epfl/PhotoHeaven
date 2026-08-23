@@ -314,6 +314,9 @@ def name(
 
     try:
         updated = service.name_cluster(cluster_label, identity_name)
+    except ValueError as exc:
+        console.print(f"[red]Invalid identity name:[/red] {exc}")
+        raise typer.Exit(1) from exc
     except Exception as exc:
         logger.exception("Failed to name cluster %d", cluster_label)
         console.print(f"[red]Failed to name cluster:[/red] {exc}")

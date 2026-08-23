@@ -132,6 +132,11 @@ class MediaRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def get_embedding_versions(self) -> set[str]:
+        """Return the distinct embedding versions present in the library."""
+        raise NotImplementedError
+
+    @abstractmethod
     def update_face_cluster_label(
         self, face_id: str, cluster_label: int | None
     ) -> None:

@@ -73,6 +73,14 @@ class FakeRepository(MediaRepository):
     def get_all_faces(self) -> list[Face]:
         return list(self.faces.values())
 
+    def get_embedding_versions(self) -> set[str]:
+        versions = {
+            face.embedding_version
+            for face in self.faces.values()
+            if face.embedding_version
+        }
+        return versions if versions else set()
+
     def update_face_cluster_label(
         self, face_id: str, cluster_label: int | None
     ) -> None:
@@ -311,3 +319,25 @@ def test_detect_handles_analyzer_error_gracefully() -> None:
     assert result.processed == 0
     assert result.errors == 1
     assert media.face_analysis_at is None
+
+
+def test_detect_continues_after_analyzer_error() -> None:
+    repo = FakeRepository()
+    broken = _image_media(path="/fake/broken.jpg")
+    good = _image_media(path="/fake/good.jpg")
+    repo.save_media(broken)
+    repo.save_media(good)
+
+    face = _face(good.id)
+    analyzer = FakeAnalyzer(faces_by_media={good.id: [face]})
+    analyzer.fail_for.add(broken.path)
+    service = FaceDetectionService(analyzer, repo)
+
+    result = service.detect()
+
+    assert result.processed == 1
+    assert result.errors == 1
+    assert result.faces_detected == 1
+    assert len(repo.faces) == 1
+    assert broken.face_analysis_at is None
+    assert good.face_analysis_at is not None

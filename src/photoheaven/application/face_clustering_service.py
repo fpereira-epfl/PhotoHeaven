@@ -94,6 +94,14 @@ class FaceClusteringService:
             logger.info("No faces to cluster")
             return FaceClusteringResult()
 
+        versions = self.repository.get_embedding_versions()
+        if len(versions) > 1:
+            raise ValueError(
+                f"Cannot cluster faces with mixed embedding versions: {sorted(versions)}. "
+                "Run with --force to re-analyse older media, or ensure all faces "
+                "use the same face analysis model."
+            )
+
         logger.info("Clustering %d face embedding(s)", len(faces))
 
         self._ensure_identities_for_named_faces(faces)

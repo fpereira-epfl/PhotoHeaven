@@ -74,6 +74,22 @@ class FaceIdentityService:
             for row in rows
         ]
 
+    _MAX_IDENTITY_NAME_LENGTH = 100
+
+    def _sanitize_identity_name(self, name: str) -> str:
+        """Strip whitespace, collapse spaces, and cap length.
+
+        Raises ``ValueError`` for empty or overly long names.
+        """
+        sanitized = " ".join(name.split())
+        if not sanitized:
+            raise ValueError("Identity name cannot be empty or only whitespace")
+        if len(sanitized) > self._MAX_IDENTITY_NAME_LENGTH:
+            raise ValueError(
+                f"Identity name exceeds {self._MAX_IDENTITY_NAME_LENGTH} characters"
+            )
+        return sanitized
+
     def name_cluster(self, cluster_label: int, identity_name: str) -> int:
         """Assign a human name to a cluster.
 
@@ -81,6 +97,7 @@ class FaceIdentityService:
         every face in the cluster to it, and returns the number of faces
         updated.
         """
+        identity_name = self._sanitize_identity_name(identity_name)
         logger.info(
             "Naming cluster %d as '%s'", cluster_label, identity_name
         )

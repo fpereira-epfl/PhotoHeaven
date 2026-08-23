@@ -70,6 +70,14 @@ class FakeRepository(MediaRepository):
     def get_all_faces(self) -> list:
         return list(self.faces.values())
 
+    def get_embedding_versions(self) -> set[str]:
+        versions = {
+            face.embedding_version
+            for face in self.faces.values()
+            if face.embedding_version
+        }
+        return versions if versions else set()
+
     def update_face_cluster_label(
         self, face_id: str, cluster_label: int | None
     ) -> None:
@@ -245,6 +253,29 @@ def test_get_sample_photos_returns_paths() -> None:
     paths = service.get_sample_photos(3, limit=2)
 
     assert paths == ["/a.jpg", "/b.jpg"]
+
+
+def test_name_cluster_sanitizes_identity_name() -> None:
+    face = _face("face-1", cluster_label=5)
+    repo = FakeRepository(faces={"face-1": face})
+    service = FaceIdentityService(repo)
+
+    service.name_cluster(5, "  Alice  Smith  ")
+
+    identity = repo.get_identity_by_id(face.identity_id)
+    assert identity is not None
+    assert identity.name == "Alice Smith"
+
+
+def test_name_cluster_rejects_empty_name() -> None:
+    repo = FakeRepository()
+    service = FaceIdentityService(repo)
+
+    try:
+        service.name_cluster(5, "   ")
+        raise AssertionError("Expected ValueError")
+    except ValueError as exc:
+        assert "empty" in str(exc).lower()
 
 
 def test_list_identities_returns_ordered_summaries() -> None:

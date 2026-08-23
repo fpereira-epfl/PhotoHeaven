@@ -70,6 +70,9 @@ class FakeRepository(MediaRepository):
     def get_all_faces(self) -> list:
         return []
 
+    def get_embedding_versions(self) -> set[str]:
+        return set()
+
     def update_face_cluster_label(
         self, face_id: str, cluster_label: int | None
     ) -> None:

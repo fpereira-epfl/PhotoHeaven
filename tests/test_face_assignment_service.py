@@ -59,6 +59,14 @@ class FakeRepository(MediaRepository):
     def get_all_faces(self) -> list[Face]:
         return list(self.faces.values())
 
+    def get_embedding_versions(self) -> set[str]:
+        versions = {
+            face.embedding_version
+            for face in self.faces.values()
+            if face.embedding_version
+        }
+        return versions if versions else set()
+
     def update_face_cluster_label(
         self, face_id: str, cluster_label: int | None
     ) -> None:
@@ -210,3 +218,25 @@ def test_assign_returns_zero_when_no_identities_exist() -> None:
     assert result.identities_used == 0
     assert result.assigned_faces == 0
     assert result.unassigned_faces == 0
+
+
+def test_assign_rejects_mixed_embedding_versions() -> None:
+    repo = FakeRepository()
+    identity = Identity(id="identity-1", name="Alice")
+    repo.save_identity(identity)
+
+    face_a = _face([1.0, 0.0, 0.0])
+    face_a.embedding_version = "v1"
+    face_a.identity_id = identity.id
+    face_b = _face([1.0, 0.0, 0.0])
+    face_b.embedding_version = "v2"
+    repo.save_face(face_a)
+    repo.save_face(face_b)
+
+    service = FaceAssignmentService(repo)
+
+    try:
+        service.assign()
+        raise AssertionError("Expected ValueError")
+    except ValueError as exc:
+        assert "mixed embedding versions" in str(exc)

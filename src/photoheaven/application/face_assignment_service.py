@@ -64,6 +64,14 @@ class FaceAssignmentService:
         Returns:
             Summary of identities used and faces assigned / left unassigned.
         """
+        versions = self.repository.get_embedding_versions()
+        if len(versions) > 1:
+            raise ValueError(
+                f"Cannot assign faces with mixed embedding versions: {sorted(versions)}. "
+                "Run face detection with --force to re-analyse older media, or "
+                "ensure all faces use the same face analysis model."
+            )
+
         centroids = self._compute_centroids()
         if not centroids:
             logger.info("No named identities exist; nothing to assign")

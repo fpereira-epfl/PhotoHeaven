@@ -58,6 +58,14 @@ class FakeRepository(MediaRepository):
     def get_all_faces(self) -> list[Face]:
         return list(self.faces.values())
 
+    def get_embedding_versions(self) -> set[str]:
+        versions = {
+            face.embedding_version
+            for face in self.faces.values()
+            if face.embedding_version
+        }
+        return versions if versions else set()
+
     def update_face_cluster_label(
         self, face_id: str, cluster_label: int | None
     ) -> None:
@@ -229,3 +237,21 @@ def test_unsupported_algorithm_raises() -> None:
         raise AssertionError("Expected ValueError")
     except ValueError as exc:
         assert "hdbscan" in str(exc)
+
+
+def test_cluster_rejects_mixed_embedding_versions() -> None:
+    repo = FakeRepository()
+    face_a = _face([1.0, 0.0, 0.0])
+    face_a.embedding_version = "v1"
+    face_b = _face([1.0, 0.0, 0.0])
+    face_b.embedding_version = "v2"
+    repo.save_face(face_a)
+    repo.save_face(face_b)
+
+    service = FaceClusteringService(repo)
+
+    try:
+        service.cluster()
+        raise AssertionError("Expected ValueError")
+    except ValueError as exc:
+        assert "mixed embedding versions" in str(exc)

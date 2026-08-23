@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import array
 import logging
+import shutil
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -176,6 +177,49 @@ def _identity_to_domain(row: _IdentityORM) -> Identity:
     )
 
 
+def _maybe_backup_database(engine, inspector) -> None:
+    """Copy the database file before schema-altering migrations.
+
+    Only backs up file-based SQLite databases that actually need modification.
+    """
+    if not inspector.has_table("media_files"):
+        return
+
+    will_migrate = False
+    if not inspector.has_table("identities"):
+        will_migrate = True
+    else:
+        existing_faces = {col["name"] for col in inspector.get_columns("faces")}
+        if "identity_id" not in existing_faces:
+            will_migrate = True
+        existing_media = {
+            col["name"] for col in inspector.get_columns("media_files")
+        }
+        for col_name in (
+            "face_analysis_at",
+            "face_analysis_version",
+            "metadata_extracted",
+        ):
+            if col_name not in existing_media:
+                will_migrate = True
+                break
+
+    if not will_migrate:
+        return
+
+    db_path = engine.url.database
+    if not db_path:
+        return
+
+    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    backup_path = f"{db_path}.backup.{timestamp}"
+    try:
+        shutil.copy2(db_path, backup_path)
+        logger.info("Backed up database to %s before migration", backup_path)
+    except Exception:
+        logger.exception("Failed to back up database before migration")
+
+
 def _backfill_legacy_identity_names(engine) -> None:
     """Convert pre-identity-table name-only rows into persistent identities."""
     from sqlalchemy.orm import sessionmaker
@@ -234,6 +278,7 @@ def _migrate_schema(engine) -> None:
     from sqlalchemy import inspect
 
     inspector = inspect(engine)
+    _maybe_backup_database(engine, inspector)
 
     def _add_column_if_missing(table_name: str, column: Column) -> None:
         if not inspector.has_table(table_name):
@@ -435,6 +480,15 @@ class SqliteMediaRepository(MediaRepository):
         with self._session() as session:
             rows = session.query(_FaceORM).all()
             return [_face_to_domain(row) for row in rows]
+
+    def get_embedding_versions(self) -> set[str]:
+        with self._session() as session:
+            rows = (
+                session.query(_FaceORM.embedding_version)
+                .distinct()
+                .all()
+            )
+            return {row.embedding_version for row in rows if row.embedding_version}
 
     def update_face_cluster_label(
         self, face_id: str, cluster_label: int | None

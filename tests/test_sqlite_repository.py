@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -204,6 +205,54 @@ def test_get_faces_for_cluster_and_identity(tmp_path: Path) -> None:
     assert len(repo.get_faces_for_cluster(4)) == 0
     assert len(repo.get_faces_for_identity("identity-1")) == 1
     assert len(repo.get_faces_for_identity("identity-2")) == 0
+
+
+def test_migration_creates_database_backup(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+
+    # Simulate an older database schema that is missing the identity table
+    # and the faces.identity_id column.
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE media_files (
+            id TEXT PRIMARY KEY,
+            path TEXT NOT NULL,
+            checksum TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            mtime REAL NOT NULL,
+            media_type TEXT NOT NULL DEFAULT 'unknown',
+            capture_datetime TIMESTAMP,
+            make TEXT,
+            model TEXT,
+            latitude REAL,
+            longitude REAL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE faces (
+            id TEXT PRIMARY KEY,
+            media_id TEXT NOT NULL,
+            bbox_x1 INTEGER NOT NULL,
+            bbox_y1 INTEGER NOT NULL,
+            bbox_x2 INTEGER NOT NULL,
+            bbox_y2 INTEGER NOT NULL,
+            embedding_blob BLOB NOT NULL,
+            embedding_version TEXT NOT NULL DEFAULT 'unknown',
+            detection_confidence REAL NOT NULL DEFAULT 0.0,
+            cluster_label INTEGER,
+            identity_name TEXT,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    SqliteMediaRepository(str(db_path))
+
+    backups = list(tmp_path.glob("test.db.backup.*"))
+    assert len(backups) == 1
 
 
 def test_migration_backfills_legacy_identity_names(tmp_path: Path) -> None:

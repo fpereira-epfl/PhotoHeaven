@@ -26,6 +26,9 @@ class GeoPoint:
     latitude: float
     longitude: float
 
+    def __repr__(self) -> str:
+        return "GeoPoint(<redacted>)"
+
 
 @dataclass
 class MediaFile:
@@ -52,6 +55,15 @@ class MediaFile:
 
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return (
+            f"MediaFile(id={self.id!r}, path=<redacted>, "
+            f"checksum={self.checksum!r}, size_bytes={self.size_bytes}, "
+            f"media_type={self.media_type}, gps=<redacted>, "
+            f"face_analysis_at={self.face_analysis_at}, "
+            f"metadata_extracted={self.metadata_extracted})"
+        )
 
 
 @dataclass
@@ -88,3 +100,14 @@ class Face:
     """Denormalised display name for convenience."""
 
     created_at: datetime = field(default_factory=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return (
+            f"Face(id={self.id!r}, media_id={self.media_id!r}, "
+            f"bbox={self.bbox}, embedding=<redacted>, "
+            f"embedding_version={self.embedding_version!r}, "
+            f"detection_confidence={self.detection_confidence}, "
+            f"cluster_label={self.cluster_label}, "
+            f"identity_id={self.identity_id!r}, "
+            f"identity_name={self.identity_name!r})"
+        )

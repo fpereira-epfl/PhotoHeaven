@@ -29,6 +29,9 @@ class FakeRepository(MediaRepository):
     def list_media(self, limit: int = 100, offset: int = 0):
         return []
 
+    def get_all_media_paths(self) -> list[str]:
+        return []
+
     def save_face(self, face: Face) -> None:
         self.faces[face.id] = face
 

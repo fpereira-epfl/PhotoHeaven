@@ -79,6 +79,15 @@ class MediaRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def get_all_media_paths(self) -> list[str]:
+        """Return all stored media file paths.
+
+        This is intended for path-analysis operations and may load a large
+        result set into memory.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def save_face(self, face: Face) -> None:
         """Persist a detected face."""
         raise NotImplementedError

@@ -22,6 +22,7 @@ from photoheaven.application.face_identity_service import (
     FaceIdentityService,
     IdentitySummary,
 )
+from photoheaven.cli import config as cli_config
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +35,7 @@ console = Console()
 
 
 def _get_db_path(db_path: str | None) -> str:
-    if db_path:
-        resolved = db_path
-    else:
-        resolved = str(Path.cwd() / "db" / "photoheaven.db")
+    resolved = cli_config.resolve_db_path(db_path)
     Path(resolved).parent.mkdir(parents=True, exist_ok=True)
     return resolved
 

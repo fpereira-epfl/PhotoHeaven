@@ -17,6 +17,8 @@ from photoheaven.adapters.integrity.hasher import Blake3Hasher
 from photoheaven.adapters.metadata.exif import FallbackMetadataExtractor
 from photoheaven.adapters.persistence.sqlite import SqliteMediaRepository
 from photoheaven.application.ingestion_service import IngestionService, guess_media_type
+from photoheaven.application.library_service import LibraryMigrationService
+from photoheaven.cli import config as cli_config
 from photoheaven.cli.faces import faces_app
 from photoheaven.domain.models import MediaFile
 
@@ -30,6 +32,20 @@ app = typer.Typer(
 )
 app.add_typer(faces_app, name="faces")
 console = Console()
+
+
+@app.callback()
+def main(
+    library: Optional[str] = typer.Option(
+        None,
+        "--library",
+        envvar="PHOTOHEAVEN_LIBRARY",
+        help="Path to a self-contained PhotoHeaven library folder.",
+    ),
+) -> None:
+    """Global options for all PhotoHeaven commands."""
+    if library:
+        cli_config.state["library"] = library
 
 # Make library log messages visible through the CLI.
 logging.basicConfig(
@@ -68,10 +84,7 @@ SUPPORTED_EXTENSIONS = {
 
 
 def _get_db_path(db_path: Optional[str]) -> str:
-    if db_path:
-        resolved = db_path
-    else:
-        resolved = str(Path.cwd() / "db" / "photoheaven.db")
+    resolved = cli_config.resolve_db_path(db_path)
     Path(resolved).parent.mkdir(parents=True, exist_ok=True)
     return resolved
 
@@ -224,16 +237,24 @@ def info(
     ),
 ) -> None:
     """Show library statistics."""
-    repository = SqliteMediaRepository(_get_db_path(db_path))
+    resolved_db = _get_db_path(db_path)
+    repository = SqliteMediaRepository(resolved_db)
     media_count = repository.count_media()
     face_count = repository.count_faces()
+
+    photo_root = cli_config.resolve_photo_root(
+        repository.get_all_media_paths()
+    )
+    if photo_root is None:
+        photo_root = cli_config.resolve_library_root(resolved_db)
 
     table = Table(title="Library overview")
     table.add_column("Metric", style="cyan")
     table.add_column("Value", justify="right", style="magenta")
+    table.add_row("Library root", photo_root)
     table.add_row("Media files", str(media_count))
     table.add_row("Detected faces", str(face_count))
-    table.add_row("Database", _get_db_path(db_path))
+    table.add_row("Database", resolved_db)
     console.print(table)
 
 
@@ -642,6 +663,104 @@ def clean(
     table.add_row("removed" if not dry_run else "would remove", str(len(removed)))
     table.add_row("error", str(len(errors)))
     console.print(table)
+
+
+@app.command()
+def init(
+    library_path: Path = typer.Argument(
+        ..., help="Path to the library folder to create."
+    ),
+) -> None:
+    """Create a new self-contained PhotoHeaven library."""
+    service = LibraryMigrationService(Blake3Hasher())
+
+    try:
+        db_path = service.init_library(library_path)
+    except Exception as exc:
+        logger.exception("Failed to initialise library")
+        console.print(f"[red]Failed to initialise library:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    console.print(f"Created library database at [cyan]{db_path}[/cyan]")
+
+
+@app.command()
+def migrate(
+    source: Path = typer.Argument(
+        ...,
+        help=(
+            "Source folder containing media files. When using --paths-only, "
+            "this is the old root where files used to be; it need not exist."
+        ),
+    ),
+    library: Path = typer.Argument(
+        ..., help="Target library folder (created if missing)."
+    ),
+    db_path: Optional[str] = typer.Option(
+        None,
+        "--db",
+        help="Source database path (defaults to ./db/photoheaven.db).",
+    ),
+    move_files: bool = typer.Option(
+        False,
+        "--move-files",
+        help="Physically move files to the library instead of copying them.",
+    ),
+    paths_only: bool = typer.Option(
+        False,
+        "--paths-only",
+        help=(
+            "Do not touch media files. Only copy the database and update "
+            "stored paths from SOURCE to LIBRARY. Use this when you have "
+            "already moved the files manually."
+        ),
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        "-n",
+        help="Show what would happen without making changes.",
+    ),
+) -> None:
+    """Migrate media files and a database into a self-contained library."""
+    if not paths_only and (not source.exists() or not source.is_dir()):
+        console.print(
+            "[red]Source must be an existing directory unless using --paths-only.[/red]"
+        )
+        raise typer.Exit(1)
+
+    service = LibraryMigrationService(Blake3Hasher())
+    source_db = Path(db_path) if db_path else None
+
+    try:
+        result = service.migrate(
+            source,
+            library,
+            source_db,
+            move_files=move_files,
+            paths_only=paths_only,
+            dry_run=dry_run,
+        )
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    except Exception as exc:
+        logger.exception("Library migration failed")
+        console.print(f"[red]Migration failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    table = Table(title="Migration summary")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Count", justify="right", style="magenta")
+    table.add_row("Files copied", str(result.files_copied))
+    table.add_row("Files moved", str(result.files_moved))
+    table.add_row("Files skipped (duplicates)", str(result.files_skipped))
+    table.add_row("Errors", str(result.errors))
+    table.add_row("Media paths updated", str(result.media_paths_updated))
+    console.print(table)
+    console.print(f"Library database: [cyan]{result.target_db_path}[/cyan]")
+    if dry_run:
+        console.print("[yellow]Dry run — no changes were made.[/yellow]")
 
 
 @app.command()

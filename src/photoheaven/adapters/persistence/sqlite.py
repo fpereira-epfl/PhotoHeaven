@@ -395,6 +395,11 @@ class SqliteMediaRepository(MediaRepository):
             )
             return [_media_to_domain(row) for row in rows]
 
+    def get_all_media_paths(self) -> list[str]:
+        with self._session() as session:
+            rows = session.query(_MediaFileORM.path).all()
+            return [row.path for row in rows]
+
     def save_face(self, face: Face) -> None:
         """Persist a face record, updating in place if it already exists."""
         with self._session() as session:

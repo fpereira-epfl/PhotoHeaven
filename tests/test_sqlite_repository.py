@@ -279,6 +279,18 @@ def test_migration_backfills_legacy_identity_names(tmp_path: Path) -> None:
     assert identity.id == reloaded.identity_id
 
 
+def test_get_all_media_paths_returns_stored_paths(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    repo = SqliteMediaRepository(str(db_path))
+
+    repo.save_media(_media("/photos/a.jpg"))
+    repo.save_media(_media("/photos/b.jpg"))
+
+    paths = repo.get_all_media_paths()
+
+    assert sorted(paths) == ["/photos/a.jpg", "/photos/b.jpg"]
+
+
 def test_get_identity_summary_counts_distinct_photos(
     tmp_path: Path,
 ) -> None:

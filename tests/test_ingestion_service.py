@@ -39,6 +39,9 @@ class FakeRepository(MediaRepository):
     def list_media(self, limit: int = 100, offset: int = 0) -> list[MediaFile]:
         return list(self.media.values())[offset : offset + limit]
 
+    def get_all_media_paths(self) -> list[str]:
+        return [media.path for media in self.media.values()]
+
     def save_face(self, face) -> None:
         pass
 

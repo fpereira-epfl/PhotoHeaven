@@ -69,6 +69,11 @@ class MediaRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def update_media_path(self, media_id: str, new_path: str) -> None:
+        """Update the stored filesystem path for a media file."""
+        raise NotImplementedError
+
+    @abstractmethod
     def count_media(self) -> int:
         """Return the number of media files in the library."""
         raise NotImplementedError

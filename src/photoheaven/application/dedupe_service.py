@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -48,12 +49,33 @@ class DedupeResult:
 
 
 @dataclass
+class DedupeMoveResult:
+    """Result of moving duplicate files to the duplicates folder."""
+
+    groups_processed: int = 0
+    files_moved: int = 0
+    files_missing: int = 0
+    groups_with_errors: int = 0
+
+
+@dataclass
+class DedupeMoveProgress:
+    """Live progress snapshot emitted during duplicate moving."""
+
+    total_groups: int = 0
+    groups_done: int = 0
+    files_moved: int = 0
+    files_missing: int = 0
+
+
+@dataclass
 class DedupeProgress:
     """Live progress snapshot emitted during duplicate detection."""
 
     total_media: int = 0
     hashes_total: int = 0
     hashes_done: int = 0
+    candidate_pairs_total: int = 0
     candidate_pairs_checked: int = 0
     groups_found: int = 0
     duplicate_files_found: int = 0
@@ -108,6 +130,11 @@ class DedupeService:
         self._ensure_perceptual_hashes(items, result, progress, progress_callback)
 
         buckets = self._bucket_items(items)
+        progress.candidate_pairs_total = sum(
+            len(bucket) * (len(bucket) - 1) // 2 for bucket in buckets.values()
+        )
+        self._notify(progress_callback, progress)
+
         edges: list[tuple[str, str, str]] = []
         # Track best match level per media id for storage.
         best_level: dict[str, str] = {}
@@ -147,8 +174,8 @@ class DedupeService:
 
     @staticmethod
     def _notify(
-        callback: Optional[Callable[[DedupeProgress], None]],
-        progress: DedupeProgress,
+        callback: Optional[Callable[..., None]],
+        progress: DedupeProgress | DedupeMoveProgress,
     ) -> None:
         if callback is not None:
             callback(progress)
@@ -177,6 +204,120 @@ class DedupeService:
             filtered_groups.append(group)
 
         return sorted(filtered_groups, key=self._group_sort_key, reverse=True)
+
+    def move_duplicates(
+        self,
+        duplicates_root: Path,
+        *,
+        dry_run: bool = False,
+        progress_callback: Optional[Callable[[DedupeMoveProgress], None]] = None,
+    ) -> DedupeMoveResult:
+        """Move non-primary duplicate files into ``duplicates_root/YYYY/MM``.
+
+        The database is updated to reflect the new paths, so ``--list`` and
+        future scans continue to treat the moved files as duplicates of the
+        primary. The primary file is never moved.
+        """
+        result = DedupeMoveResult()
+        groups = self.list_duplicate_groups()
+        if not groups:
+            return result
+
+        progress = DedupeMoveProgress(total_groups=len(groups))
+        self._notify(progress_callback, progress)
+
+        for group in groups:
+            members = group["members"]
+            if not members:
+                progress.groups_done += 1
+                self._notify(progress_callback, progress)
+                continue
+            primary = members[0]
+            primary_path = Path(primary["path"])
+            # Derive the YYYY/MM folder from the primary's current location.
+            year, month = self._resolve_year_month(primary_path)
+            group_target_dir = duplicates_root / year / month
+
+            group_ok = True
+            for member in members[1:]:
+                source = Path(member["path"])
+                target = self._unique_target_path(
+                    group_target_dir, source.name, primary_path.name
+                )
+                if dry_run:
+                    result.files_moved += 1
+                    progress.files_moved += 1
+                    continue
+
+                try:
+                    group_target_dir.mkdir(parents=True, exist_ok=True)
+                    if not source.exists():
+                        if target.exists():
+                            # Already moved in a previous/interrupted run;
+                            # just reconcile the database path.
+                            self.repository.update_media_path(
+                                member["media_id"], str(target)
+                            )
+                        else:
+                            result.files_missing += 1
+                            progress.files_missing += 1
+                            group_ok = False
+                        continue
+
+                    if source.resolve() == target.resolve():
+                        # Source and target are the same file; nothing to do.
+                        continue
+
+                    shutil.move(str(source), str(target))
+                    self.repository.update_media_path(
+                        member["media_id"], str(target)
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "Failed to move duplicate %s to %s: %s",
+                        source,
+                        target,
+                        exc,
+                    )
+                    group_ok = False
+                    continue
+                result.files_moved += 1
+                progress.files_moved += 1
+            result.groups_processed += 1
+            progress.groups_done += 1
+            if not group_ok:
+                result.groups_with_errors += 1
+            self._notify(progress_callback, progress)
+
+        return result
+
+    @staticmethod
+    def _resolve_year_month(path: Path) -> tuple[str, str]:
+        """Return (YYYY, MM) from the nearest parent folder names if possible."""
+        parts = path.parts
+        for i in range(len(parts) - 2, -1, -1):
+            if len(parts[i]) == 4 and parts[i].isdigit() and len(parts[i + 1]) == 2 and parts[i + 1].isdigit():
+                return parts[i], parts[i + 1]
+        # Fallback to the file's current modification/capture date would require
+        # another DB lookup; use filesystem mtime as a reasonable approximation.
+        mtime = datetime.fromtimestamp(path.stat().st_mtime)
+        return f"{mtime.year:04d}", f"{mtime.month:02d}"
+
+    @staticmethod
+    def _unique_target_path(directory: Path, original_name: str, primary_name: str) -> Path:
+        """Return a unique target path that avoids clashing with the primary."""
+        candidate = directory / original_name
+        if candidate.name.lower() != primary_name.lower() and not candidate.exists():
+            return candidate
+
+        stem = Path(original_name).stem
+        suffix = Path(original_name).suffix
+        n = 1
+        while True:
+            candidate = directory / f"{stem}_{n}{suffix}"
+            if candidate.name.lower() != primary_name.lower() and not candidate.exists():
+                return candidate
+            n += 1
 
     def _member_sort_key(self, member: dict) -> tuple:
         """Sort key for a group member dict (higher = better)."""

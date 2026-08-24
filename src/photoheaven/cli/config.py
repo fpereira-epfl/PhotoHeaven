@@ -30,11 +30,19 @@ def resolve_db_path(db_path: str | None) -> str:
     return str(Path.cwd() / DB_DIR / DB_NAME)
 
 
-def resolve_library_package(db_path: str) -> str:
+def resolve_library_package(db_path: str | None = None) -> str | None:
     """Return the self-contained library package folder.
 
     - ``<root>/db/photoheaven.db`` → ``<root>``
+
+    If ``db_path`` is None, the current ``state["library"]`` is used when set.
     """
+    if db_path is None:
+        library = state.get("library")
+        if library:
+            db_path = str(Path(library).expanduser().resolve() / DB_DIR / DB_NAME)
+        else:
+            return None
     path = Path(db_path).expanduser().resolve()
     if path.name == DB_NAME and path.parent.name == DB_DIR:
         return str(path.parent.parent)

@@ -183,6 +183,11 @@ class FakeRepository(MediaRepository):
         if media is not None:
             media.perceptual_hash = perceptual_hash
 
+    def update_media_path(self, media_id: str, new_path: str) -> None:
+        media = self.media.get(media_id)
+        if media is not None:
+            media.path = new_path
+
     def clear_duplicate_groups(self) -> None:
         pass
 

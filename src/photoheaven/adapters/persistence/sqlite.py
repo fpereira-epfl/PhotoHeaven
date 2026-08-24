@@ -418,6 +418,15 @@ class SqliteMediaRepository(MediaRepository):
         with self._session() as session:
             return session.query(_MediaFileORM).count()
 
+    def update_media_path(self, media_id: str, new_path: str) -> None:
+        with self._session() as session:
+            media = session.get(_MediaFileORM, media_id)
+            if media is None:
+                return
+            media.path = new_path
+            media.updated_at = datetime.utcnow()
+            session.commit()
+
     def list_media(self, limit: int = 100, offset: int = 0) -> list[MediaFile]:
         with self._session() as session:
             rows = (

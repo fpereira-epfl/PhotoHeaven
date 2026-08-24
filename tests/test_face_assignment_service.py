@@ -163,6 +163,9 @@ class FakeRepository(MediaRepository):
     ) -> None:
         pass
 
+    def update_media_path(self, media_id: str, new_path: str) -> None:
+        pass
+
     def clear_duplicate_groups(self) -> None:
         pass
 

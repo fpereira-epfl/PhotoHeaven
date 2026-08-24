@@ -20,7 +20,11 @@ from photoheaven.adapters.integrity.hasher import Blake3Hasher
 from photoheaven.adapters.integrity.perceptual_hasher import PerceptualHasher
 from photoheaven.adapters.metadata.exif import FallbackMetadataExtractor
 from photoheaven.adapters.persistence.sqlite import SqliteMediaRepository
-from photoheaven.application.dedupe_service import DedupeProgress, DedupeService
+from photoheaven.application.dedupe_service import (
+    DedupeMoveProgress,
+    DedupeProgress,
+    DedupeService,
+)
 from photoheaven.application.ingestion_service import IngestionService, guess_media_type
 from photoheaven.application.library_service import LibraryService
 from photoheaven.cli import config as cli_config
@@ -788,6 +792,12 @@ def dedupe(
         "--reset",
         help="Clear existing groups and rescan from scratch.",
     ),
+    move: bool = typer.Option(
+        False,
+        "--move",
+        "-mv",
+        help="Move non-primary duplicates to <library>/duplicates/YYYY/MM.",
+    ),
     max_distance: int = typer.Option(
         5,
         "--max-distance",
@@ -798,6 +808,11 @@ def dedupe(
         "--quiet",
         "-q",
         help="Suppress live progress output.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show what would be moved without moving files.",
     ),
 ) -> None:
     """Find duplicate photos/videos using checksum and perceptual hash."""
@@ -845,6 +860,37 @@ def dedupe(
     table.add_row("Perceptual matches", str(result.perceptual_matches))
     console.print(table)
 
+    if move:
+        library_package = cli_config.resolve_library_package()
+        if library_package is None:
+            console.print("[red]Could not resolve library package path.[/red]")
+            raise typer.Exit(1)
+        duplicates_root = Path(library_package) / "duplicates"
+
+        if quiet or dry_run:
+            move_result = service.move_duplicates(
+                duplicates_root, dry_run=dry_run
+            )
+        else:
+            move_result = _run_dedupe_move(service, duplicates_root)
+
+        move_table = Table(title="Move summary")
+        move_table.add_column("Metric", style="cyan")
+        move_table.add_column("Count", justify="right", style="magenta")
+        move_table.add_row("Groups processed", str(move_result.groups_processed))
+        move_table.add_row("Files moved", str(move_result.files_moved))
+        if move_result.files_missing:
+            move_table.add_row(
+                "Files already gone/missing",
+                f"[yellow]{move_result.files_missing}[/yellow]",
+            )
+        if move_result.groups_with_errors:
+            move_table.add_row(
+                "Groups with errors",
+                f"[red]{move_result.groups_with_errors}[/red]",
+            )
+        console.print(move_table)
+
 
 def _run_dedupe_scan(
     service: DedupeService,
@@ -868,7 +914,7 @@ def _run_dedupe_scan(
         TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
         TextColumn("{task.fields[info]}"),
         console=console,
-        transient=False,
+        transient=True,
     )
     hash_task = progress.add_task(
         "Computing hashes", total=1, info="loading..."
@@ -877,13 +923,14 @@ def _run_dedupe_scan(
         "Comparing candidates", total=1, info="loading..."
     )
     group_task = progress.add_task(
-        "Groups found", total=1, info="0 dup files"
+        "Groups found", total=None, info="0 dup files"
     )
 
     def _progress_callback(snapshot: DedupeProgress) -> None:
         progress_state.total_media = snapshot.total_media
         progress_state.hashes_total = snapshot.hashes_total
         progress_state.hashes_done = snapshot.hashes_done
+        progress_state.candidate_pairs_total = snapshot.candidate_pairs_total
         progress_state.candidate_pairs_checked = snapshot.candidate_pairs_checked
         progress_state.groups_found = snapshot.groups_found
         progress_state.duplicate_files_found = snapshot.duplicate_files_found
@@ -896,14 +943,12 @@ def _run_dedupe_scan(
         )
         progress.update(
             pair_task,
-            total=max(snapshot.total_media, 1),
-            completed=min(snapshot.candidate_pairs_checked, snapshot.total_media),
-            info=f"{snapshot.candidate_pairs_checked} pairs checked",
+            total=max(snapshot.candidate_pairs_total, 1),
+            completed=snapshot.candidate_pairs_checked,
+            info=f"{snapshot.candidate_pairs_checked}/{snapshot.candidate_pairs_total} pairs",
         )
         progress.update(
             group_task,
-            total=max(snapshot.total_media, 1),
-            completed=snapshot.groups_found,
             info=f"{snapshot.groups_found} groups, {snapshot.duplicate_files_found} dup files",
         )
 
@@ -911,6 +956,48 @@ def _run_dedupe_scan(
         return service.find_duplicates(
             reset=reset,
             max_distance=max_distance,
+            progress_callback=_progress_callback,
+        )
+
+
+def _run_dedupe_move(
+    service: DedupeService,
+    duplicates_root: Path,
+) -> Any:
+    """Run duplicate moving with a live progress display."""
+    progress_state = DedupeMoveProgress()
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TextColumn("{task.fields[info]}"),
+        console=console,
+        transient=True,
+    )
+    group_task = progress.add_task(
+        "Moving duplicates", total=1, info="loading..."
+    )
+
+    def _progress_callback(snapshot: DedupeMoveProgress) -> None:
+        progress_state.total_groups = snapshot.total_groups
+        progress_state.groups_done = snapshot.groups_done
+        progress_state.files_moved = snapshot.files_moved
+        progress_state.files_missing = snapshot.files_missing
+
+        progress.update(
+            group_task,
+            total=max(snapshot.total_groups, 1),
+            completed=snapshot.groups_done,
+            info=(
+                f"{snapshot.groups_done}/{snapshot.total_groups} groups, "
+                f"{snapshot.files_moved} moved, {snapshot.files_missing} missing"
+            ),
+        )
+
+    with Live(progress, console=console, refresh_per_second=8, transient=True):
+        return service.move_duplicates(
+            duplicates_root,
             progress_callback=_progress_callback,
         )
 

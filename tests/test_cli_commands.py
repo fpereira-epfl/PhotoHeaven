@@ -324,6 +324,42 @@ def test_dedupe_quiet_suppresses_progress(tmp_path: Path) -> None:
     assert "Comparing candidates" not in result.output
 
 
+def test_dedupe_move_moves_duplicates_and_updates_paths(tmp_path: Path) -> None:
+    library = tmp_path / "Library.photoslibrary"
+    db_path = library / "db" / "photoheaven.db"
+    db_path.parent.mkdir(parents=True)
+    repo = SqliteMediaRepository(str(db_path))
+
+    source = library / "files" / "2024" / "05" / "source.jpg"
+    dup = library / "files" / "2024" / "05" / "dup.jpg"
+    source.parent.mkdir(parents=True)
+    Image.new("RGB", (50, 50), color="orange").save(source)
+    shutil.copy2(source, dup)
+
+    dt = datetime(2024, 5, 1, 12, 0, 0)
+    repo.save_media(
+        _media(str(source), checksum="c1", size_bytes=5000, capture_datetime=dt)
+    )
+    repo.save_media(
+        _media(str(dup), checksum="c2", size_bytes=1000, capture_datetime=dt)
+    )
+
+    cli_config.state["library"] = str(library)
+    move_result = runner.invoke(app, ["dedupe", "--move"])
+    result = runner.invoke(app, ["dedupe", "--list"])
+    cli_config.state["library"] = None
+
+    assert move_result.exit_code == 0
+    assert result.exit_code == 0
+    assert "Duplicate groups: 1" in result.output
+    # Rich may wrap the long path across lines, so verify filesystem/DB state.
+    moved_dup = library / "duplicates" / "2024" / "05" / "dup.jpg"
+    assert moved_dup.exists()
+    assert not dup.exists()
+    assert repo.get_by_checksum("c2").path == str(moved_dup)
+    assert "source.jpg" in result.output
+
+
 def test_dedupe_list_only_faces_shows_groups_with_faces(tmp_path: Path) -> None:
     library = tmp_path / "Library.photoslibrary"
     db_path = library / "db" / "photoheaven.db"

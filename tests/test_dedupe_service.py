@@ -68,6 +68,11 @@ class _FakeDedupeRepository:
             if item.id == media_id:
                 item.perceptual_hash = perceptual_hash
 
+    def update_media_path(self, media_id: str, new_path: str) -> None:
+        for item in self._items:
+            if item.id == media_id:
+                item.path = new_path
+
     def clear_duplicate_groups(self) -> None:
         self._groups = []
 
@@ -200,6 +205,70 @@ def test_prefers_heic_as_primary(tmp_path: Path) -> None:
     assert len(groups) == 1
     members = sorted(groups[0]["members"], key=lambda m: m["is_primary"], reverse=True)
     assert members[0]["path"].endswith(".heic")
+
+
+def test_move_duplicates_organizes_into_year_month_folders(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+
+    source = tmp_path / "files" / "2024" / "05" / "source.jpg"
+    dup1 = tmp_path / "files" / "2024" / "05" / "dup1.jpg"
+    dup2 = tmp_path / "files" / "2024" / "05" / "dup2.jpg"
+    source.parent.mkdir(parents=True)
+    Image.new("RGB", (50, 50), color="black").save(source)
+    shutil.copy2(source, dup1)
+    shutil.copy2(source, dup2)
+
+    dt = datetime(2024, 5, 1, 12, 0, 0)
+    repo.save_media(
+        _media(source, checksum="c1", size_bytes=5000, capture_datetime=dt)
+    )
+    repo.save_media(_media(dup1, checksum="c2", size_bytes=1000, capture_datetime=dt))
+    repo.save_media(_media(dup2, checksum="c3", size_bytes=900, capture_datetime=dt))
+
+    service = DedupeService(repo, PerceptualHasher())
+    service.find_duplicates()
+
+    duplicates_root = tmp_path / "duplicates"
+    move_result = service.move_duplicates(duplicates_root)
+
+    assert move_result.groups_processed == 1
+    assert move_result.files_moved == 2
+    assert move_result.groups_with_errors == 0
+
+    expected_dup1 = duplicates_root / "2024" / "05" / "dup1.jpg"
+    expected_dup2 = duplicates_root / "2024" / "05" / "dup2.jpg"
+    assert expected_dup1.exists()
+    assert expected_dup2.exists()
+    assert not dup1.exists()
+    assert not dup2.exists()
+    assert source.exists()
+
+    # Database paths should reflect the move.
+    assert repo.get_by_checksum("c2").path == str(expected_dup1)
+    assert repo.get_by_checksum("c3").path == str(expected_dup2)
+
+
+def test_move_duplicates_dry_run_does_not_move_files(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+
+    source = tmp_path / "files" / "2024" / "05" / "source.jpg"
+    dup = tmp_path / "files" / "2024" / "05" / "dup.jpg"
+    source.parent.mkdir(parents=True)
+    Image.new("RGB", (50, 50), color="black").save(source)
+    shutil.copy2(source, dup)
+
+    dt = datetime(2024, 5, 1, 12, 0, 0)
+    repo.save_media(_media(source, checksum="c1", size_bytes=5000, capture_datetime=dt))
+    repo.save_media(_media(dup, checksum="c2", size_bytes=1000, capture_datetime=dt))
+
+    service = DedupeService(repo, PerceptualHasher())
+    service.find_duplicates()
+
+    move_result = service.move_duplicates(tmp_path / "duplicates", dry_run=True)
+
+    assert move_result.files_moved == 1
+    assert dup.exists()
+    assert repo.get_by_checksum("c2").path == str(dup)
 
 
 def test_list_duplicate_groups_sorted_by_primary_quality(tmp_path: Path) -> None:

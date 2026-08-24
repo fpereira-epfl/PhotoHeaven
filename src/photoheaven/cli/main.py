@@ -225,17 +225,19 @@ def sync(
     }
     seen_paths: set[str] = set()
 
+    all_files = files + duplicate_files
+
     if dry_run:
         hasher = Blake3Hasher()
-        for file_path in files + duplicate_files:
+        for file_path in all_files:
             seen_paths.add(str(file_path))
             try:
                 checksum = hasher.hash_file(file_path)
                 stat = file_path.stat()
-                existing = service.repository.get_by_checksum(checksum)
+                existing = service.repository.get_by_path(str(file_path.resolve()))
                 if existing is None:
                     counts["added"] += 1
-                elif existing.mtime != stat.st_mtime or force:
+                elif existing.checksum != checksum or existing.mtime != stat.st_mtime or force:
                     counts["updated"] += 1
                 else:
                     counts["skipped"] += 1
@@ -260,12 +262,22 @@ def sync(
             transient=True,
         ) as progress:
             task = progress.add_task(
-                f"Syncing {len(files)} item(s)...", total=len(files)
+                f"Syncing {len(all_files)} item(s)...", total=len(all_files)
             )
-            for file_path in files:
+            for file_path in all_files:
                 seen_paths.add(str(file_path))
+                is_duplicate_path = (
+                    duplicates_root is not None
+                    and str(file_path).startswith(str(duplicates_root))
+                )
                 result = service.ingest_file(file_path, force=force)
                 counts[result.status] = counts.get(result.status, 0) + 1
+
+                # Duplicate files are already quarantined; never move them out of
+                # the duplicates tree into the corrupted folder.
+                if is_duplicate_path:
+                    progress.advance(task)
+                    continue
 
                 should_move = False
                 if not result.metadata_extracted and result.status in {

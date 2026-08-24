@@ -104,10 +104,10 @@ class IngestionService:
             )
 
         stat = path.stat()
-        existing = self.repository.get_by_checksum(checksum)
+        existing = self.repository.get_by_path(str(path.resolve()))
 
         if existing is not None and not force:
-            if existing.mtime == stat.st_mtime:
+            if existing.checksum == checksum and existing.mtime == stat.st_mtime:
                 return IngestResult(
                     status="skipped",
                     media=existing,

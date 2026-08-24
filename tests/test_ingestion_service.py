@@ -174,6 +174,12 @@ class FakeRepository(MediaRepository):
                 return media.id
         return None
 
+
+    def get_by_path(self, path: str) -> Optional[MediaFile]:
+        for media in self.media.values():
+            if media.path == path:
+                return media
+        return None
     def clear_duplicate_groups(self) -> None:
         pass
 

@@ -37,7 +37,7 @@ class _MediaFileORM(Base):
 
     id = Column(String(36), primary_key=True)
     path = Column(String, nullable=False, unique=True)
-    checksum = Column(String(64), nullable=False, unique=True, index=True)
+    checksum = Column(String(64), nullable=False, index=True)
     size_bytes = Column(Integer, nullable=False)
     mtime = Column(Float, nullable=False)
     media_type = Column(String(16), nullable=False, default="unknown")
@@ -374,7 +374,33 @@ def _migrate_schema(engine) -> None:
         Column("identity_id", String(36), ForeignKey("identities.id"), nullable=True),
     )
 
+    # Older databases had a UNIQUE constraint on media_files.checksum, which
+    # prevented two identical files at different paths from being indexed.
+    # SQLite does not support DROP CONSTRAINT directly, so we recreate the
+    # table without the unique index if it exists.
+    _drop_checksum_unique_constraint(engine, inspector)
+
     _backfill_legacy_identity_names(engine)
+
+
+def _drop_checksum_unique_constraint(engine, inspector) -> None:
+    """Remove the obsolete UNIQUE constraint/index on media_files.checksum."""
+    indexes = {idx["name"] for idx in inspector.get_indexes("media_files")}
+    if "ix_media_files_checksum" in indexes:
+        # The index is not unique in the new schema; drop it and let the
+        # normal startup recreate it as a non-unique index.
+        with engine.begin() as conn:
+            conn.exec_driver_sql(
+                "DROP INDEX ix_media_files_checksum"
+            )
+        logger.info("Dropped obsolete unique index on media_files.checksum")
+    # SQLAlchemy may have named the unique index differently depending on the
+    # version; also try the auto-generated name.
+    for idx_name in list(indexes):
+        if "checksum" in idx_name and idx_name != "ix_media_files_checksum":
+            with engine.begin() as conn:
+                conn.exec_driver_sql(f"DROP INDEX {idx_name}")
+            logger.info("Dropped checksum index %s", idx_name)
 
 
 class SqliteMediaRepository(MediaRepository):
@@ -398,6 +424,11 @@ class SqliteMediaRepository(MediaRepository):
         with self._session() as session:
             row = session.query(_MediaFileORM.id).filter_by(path=path).first()
             return row[0] if row else None
+
+    def get_by_path(self, path: str) -> Optional[MediaFile]:
+        with self._session() as session:
+            row = session.query(_MediaFileORM).filter_by(path=path).first()
+            return _media_to_domain(row) if row else None
 
     def save_media(self, media: MediaFile) -> None:
         """Persist a media file, updating in place and keeping faces linked.

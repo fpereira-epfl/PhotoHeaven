@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -22,6 +24,44 @@ except Exception:  # pragma: no cover - optional deps may be missing
     _VIDEO_HASH_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
+
+
+try:
+    from pymediainfo import MediaInfo
+
+    _HAVE_MEDIAINFO = True
+except Exception:  # pragma: no cover
+    _HAVE_MEDIAINFO = False
+
+
+@contextlib.contextmanager
+def _silence_ffmpeg_stderr():
+    """Redirect the C-level stderr to /dev/null while OpenCV talks to FFmpeg."""
+    stderr_fileno = 2
+    old_stderr = os.dup(stderr_fileno)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, stderr_fileno)
+        yield
+    finally:
+        os.dup2(old_stderr, stderr_fileno)
+        os.close(old_stderr)
+        os.close(devnull)
+
+
+def _duration_from_mediainfo(path: Path) -> float | None:
+    """Return duration in seconds from container metadata, if available."""
+    if not _HAVE_MEDIAINFO:
+        return None
+    try:
+        media_info = MediaInfo.parse(str(path))
+        for track in media_info.tracks:
+            duration = getattr(track, "duration", None)
+            if duration:
+                return float(duration) / 1000.0
+    except Exception as exc:
+        logger.debug("Could not read MediaInfo duration for %s: %s", path, exc)
+    return None
 
 
 class VideoFrameHashResult:
@@ -44,49 +84,82 @@ class VideoFrameHasher:
             raise RuntimeError(
                 "opencv-python, imagehash and Pillow are required for video hashing"
             )
+        # Silence OpenCV's own Python-level logging. FFmpeg warnings are silenced
+        # via stderr redirection while decoding.
+        cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_SILENT)  # type: ignore[attr-defined]
         self.frame_count = frame_count
 
     def compute(self, path: Path) -> VideoFrameHashResult | None:
         """Return pHashes and duration for sampled keyframes, or None on failure."""
         try:
-            cap = cv2.VideoCapture(str(path))  # type: ignore[attr-defined]
+            with _silence_ffmpeg_stderr():
+                cap = cv2.VideoCapture(str(path))  # type: ignore[attr-defined]
         except Exception as exc:
             logger.warning("Could not open video %s: %s", path, exc)
             return None
 
-        try:
-            frame_count_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))  # type: ignore[attr-defined]
-            fps = cap.get(cv2.CAP_PROP_FPS)  # type: ignore[attr-defined]
-            duration_seconds: float | None = None
-            if fps:
-                duration_seconds = frame_count_total / fps
-            if frame_count_total <= 0 or not duration_seconds or duration_seconds <= 0:
-                logger.warning("Could not determine video duration for %s", path)
-                return None
+        if not cap.isOpened():
+            logger.warning("Could not open video %s", path)
+            return None
 
-            positions = self._sample_positions(duration_seconds)
-            hashes: list[str] = []
-            for position in positions:
-                cap.set(cv2.CAP_PROP_POS_MSEC, position * 1000.0)  # type: ignore[attr-defined]
-                success, frame = cap.read()
-                if not success:
-                    continue
-                try:
-                    image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))  # type: ignore[attr-defined]
-                    hashes.append(str(imagehash.phash(image)))
-                except Exception as exc:
-                    logger.debug(
-                        "Could not hash keyframe at %.1fs for %s: %s",
-                        position,
-                        path,
-                        exc,
+        try:
+            with _silence_ffmpeg_stderr():
+                # Sanity-check the stream by reading the first frame. Corrupted
+                # files often open successfully but fail immediately on decode.
+                ok, _ = cap.read()
+                if not ok:
+                    logger.warning("Could not decode first frame of %s", path)
+                    return None
+
+                # Reset before querying properties; some containers report more
+                # accurate metadata after a successful read.
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # type: ignore[attr-defined]
+
+                frame_count_total = int(
+                    cap.get(cv2.CAP_PROP_FRAME_COUNT)  # type: ignore[attr-defined]
+                )
+                fps = cap.get(cv2.CAP_PROP_FPS)  # type: ignore[attr-defined]
+                duration_seconds: float | None = None
+                if fps:
+                    duration_seconds = frame_count_total / fps
+                if not duration_seconds or duration_seconds <= 0:
+                    duration_seconds = _duration_from_mediainfo(path)
+
+                if not duration_seconds or duration_seconds <= 0:
+                    logger.warning("Could not determine video duration for %s", path)
+                    return None
+
+                positions = self._sample_positions(duration_seconds)
+                hashes: list[str] = []
+                for position in positions:
+                    cap.set(  # type: ignore[attr-defined]
+                        cv2.CAP_PROP_POS_MSEC,  # type: ignore[attr-defined]
+                        position * 1000.0,
                     )
-            if not hashes:
-                return None
-            return VideoFrameHashResult(
-                frame_hashes=hashes,
-                duration_seconds=duration_seconds,
-            )
+                    success, frame = cap.read()
+                    if not success:
+                        continue
+                    try:
+                        image = Image.fromarray(
+                            cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # type: ignore[attr-defined]
+                        )
+                        hashes.append(str(imagehash.phash(image)))
+                    except Exception as exc:
+                        logger.debug(
+                            "Could not hash keyframe at %.1fs for %s: %s",
+                            position,
+                            path,
+                            exc,
+                        )
+                if not hashes:
+                    logger.warning(
+                        "Could not extract any hashable keyframes from %s", path
+                    )
+                    return None
+                return VideoFrameHashResult(
+                    frame_hashes=hashes,
+                    duration_seconds=duration_seconds,
+                )
         except Exception as exc:
             logger.warning(
                 "Could not compute video frame hashes for %s: %s", path, exc

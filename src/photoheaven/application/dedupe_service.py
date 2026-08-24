@@ -535,21 +535,30 @@ class DedupeService:
                     result.hashes_computed += 1
             elif include_videos and item.media.media_type == MediaType.VIDEO:
                 frame_hashes = self._compute_video_frame_hashes(path, item)
-                if frame_hashes is not None:
-                    item.video_frame_hashes = frame_hashes
-                    self.repository.update_media_video_frame_hashes(
-                        item.media.id, frame_hashes
-                    )
+                if frame_hashes:
                     result.hashes_computed += 1
             progress.hashes_done += 1
             self._notify(progress_callback, progress)
 
     def _compute_video_frame_hashes(
         self, path: Path, item: _DedupeItem
-    ) -> list[str] | None:
-        """Compute keyframe pHashes for a video file and update duration."""
+    ) -> list[str]:
+        """Compute keyframe pHashes for a video file and update duration.
+
+        Stores an empty list for corrupted or unhashable videos so they are
+        skipped on subsequent dedupe runs unless ``--force`` is used.
+        """
         result = self._compute_video_hash_result(path, item)
-        return result.frame_hashes if result is not None else None
+        if result is None:
+            # Cache failure to avoid reprocessing corrupted videos every run.
+            item.video_frame_hashes = []
+            self.repository.update_media_video_frame_hashes(item.media.id, [])
+            return []
+        item.video_frame_hashes = result.frame_hashes
+        self.repository.update_media_video_frame_hashes(
+            item.media.id, result.frame_hashes
+        )
+        return result.frame_hashes
 
     def _compute_video_hash_result(
         self, path: Path, item: _DedupeItem

@@ -44,6 +44,9 @@ class FakeRepository(MediaRepository):
     def media_has_faces(self, media_id: str) -> bool:
         return any(face.media_id == media_id for face in self.faces.values())
 
+    def get_media_ids_with_faces(self) -> set[str]:
+        return {face.media_id for face in self.faces.values()}
+
     def get_unprocessed_faces_media(
         self, limit: int = 100, offset: int = 0
     ) -> list[MediaFile]:

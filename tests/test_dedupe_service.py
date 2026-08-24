@@ -232,3 +232,79 @@ def test_list_duplicate_groups_sorted_by_primary_quality(tmp_path: Path) -> None
 
     assert len(groups) == 2
     assert groups[0]["members"][0]["size_bytes"] == 5000
+
+
+def test_list_duplicate_groups_only_faces_filters_correctly() -> None:
+    a = MediaFile(
+        id="m1",
+        path="/a.jpg",
+        checksum="same1",
+        size_bytes=1000,
+        mtime=1.0,
+        media_type=MediaType.IMAGE,
+    )
+    b = MediaFile(
+        id="m2",
+        path="/b.jpg",
+        checksum="same1",
+        size_bytes=1000,
+        mtime=1.0,
+        media_type=MediaType.IMAGE,
+    )
+    c = MediaFile(
+        id="m3",
+        path="/c.jpg",
+        checksum="same2",
+        size_bytes=1000,
+        mtime=1.0,
+        media_type=MediaType.IMAGE,
+    )
+    d = MediaFile(
+        id="m4",
+        path="/d.jpg",
+        checksum="same2",
+        size_bytes=1000,
+        mtime=1.0,
+        media_type=MediaType.IMAGE,
+    )
+
+    class _Repo(_FakeDedupeRepository):
+        def __init__(self, items, faces_media_ids):
+            super().__init__(items)
+            self._faces_media_ids = set(faces_media_ids)
+
+        def get_media_ids_with_faces(self) -> set[str]:
+            return self._faces_media_ids
+
+        def list_duplicate_groups(self) -> list[dict]:
+            return [
+                {
+                    "group_id": g["group_id"],
+                    "created_at": None,
+                    "members": [
+                        {
+                        "media_id": m["media_id"],
+                        "path": item.path,
+                        "size_bytes": item.size_bytes,
+                        "is_primary": m.get("is_primary", False),
+                        "match_level": m["match_level"],
+                        }
+                            for m in g["members"]
+                            for item in self._items
+                            if item.id == m["media_id"]
+                    ],
+                }
+                for g in self._groups
+            ]
+
+    repo = _Repo([a, b, c, d], ["m3", "m4"])
+    service = DedupeService(repo, PerceptualHasher())
+    service.find_duplicates()
+
+    all_groups = service.list_duplicate_groups()
+    face_groups = service.list_duplicate_groups(only_faces=True)
+
+    assert len(all_groups) == 2
+    assert len(face_groups) == 1
+    member_ids = {m["media_id"] for m in face_groups[0]["members"]}
+    assert member_ids == {"m3", "m4"}

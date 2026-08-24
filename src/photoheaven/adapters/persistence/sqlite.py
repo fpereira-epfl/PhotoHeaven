@@ -462,6 +462,11 @@ class SqliteMediaRepository(MediaRepository):
         with self._session() as session:
             return session.query(_FaceORM).filter_by(media_id=media_id).first() is not None
 
+    def get_media_ids_with_faces(self) -> set[str]:
+        with self._session() as session:
+            rows = session.query(distinct(_FaceORM.media_id)).all()
+            return {row[0] for row in rows}
+
     def get_unprocessed_faces_media(
         self, limit: int = 100, offset: int = 0
     ) -> list[MediaFile]:

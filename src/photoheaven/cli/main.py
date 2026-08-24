@@ -778,6 +778,11 @@ def dedupe(
         "-l",
         help="List existing duplicate groups instead of scanning.",
     ),
+    only_faces: bool = typer.Option(
+        False,
+        "--only-faces",
+        help="When listing, only show groups that contain at least one photo with a detected face.",
+    ),
     reset: bool = typer.Option(
         False,
         "--reset",
@@ -795,7 +800,7 @@ def dedupe(
         help="Suppress live progress output.",
     ),
 ) -> None:
-    """Find duplicate photos/videos using metadata, checksum, and perceptual hash."""
+    """Find duplicate photos/videos using checksum and perceptual hash."""
     db = _get_db_path()
     repository = SqliteMediaRepository(db)
     service = DedupeService(
@@ -804,7 +809,7 @@ def dedupe(
     )
 
     if list_:
-        groups = service.list_duplicate_groups()
+        groups = service.list_duplicate_groups(only_faces=only_faces)
         if not groups:
             console.print("[yellow]No duplicate groups found.[/yellow]")
             raise typer.Exit(0)

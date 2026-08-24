@@ -103,6 +103,11 @@ class MediaRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def get_media_ids_with_faces(self) -> set[str]:
+        """Return all media ids that have at least one detected face."""
+        raise NotImplementedError
+
+    @abstractmethod
     def get_unprocessed_faces_media(
         self, limit: int = 100, offset: int = 0
     ) -> list[MediaFile]:

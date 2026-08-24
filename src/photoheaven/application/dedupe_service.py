@@ -153,17 +153,30 @@ class DedupeService:
         if callback is not None:
             callback(progress)
 
-    def list_duplicate_groups(self) -> list[dict]:
+    def list_duplicate_groups(self, *, only_faces: bool = False) -> list[dict]:
         """Return stored duplicate groups ordered by quality.
 
         Each group's members are sorted so the primary/best file is first.
+        When ``only_faces`` is True, only groups where at least one member has
+        a detected face are returned.
         """
+        media_with_faces: set[str] | None = None
+        if only_faces:
+            media_with_faces = self.repository.get_media_ids_with_faces()
+
         groups = self.repository.list_duplicate_groups()
+        filtered_groups: list[dict] = []
         for group in groups:
             group["members"] = sorted(
                 group["members"], key=self._member_sort_key, reverse=True
             )
-        return sorted(groups, key=self._group_sort_key, reverse=True)
+            if only_faces:
+                member_ids = {m["media_id"] for m in group["members"]}
+                if not member_ids.intersection(media_with_faces):
+                    continue
+            filtered_groups.append(group)
+
+        return sorted(filtered_groups, key=self._group_sort_key, reverse=True)
 
     def _member_sort_key(self, member: dict) -> tuple:
         """Sort key for a group member dict (higher = better)."""

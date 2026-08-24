@@ -322,3 +322,56 @@ def test_dedupe_quiet_suppresses_progress(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert "Groups found" in result.output
     assert "Comparing candidates" not in result.output
+
+
+def test_dedupe_list_only_faces_shows_groups_with_faces(tmp_path: Path) -> None:
+    library = tmp_path / "Library.photoslibrary"
+    db_path = library / "db" / "photoheaven.db"
+    db_path.parent.mkdir(parents=True)
+    repo = SqliteMediaRepository(str(db_path))
+
+    face_source = library / "files" / "face_source.jpg"
+    face_dup = library / "files" / "face_dup.jpg"
+    noface_source = library / "files" / "noface_source.jpg"
+    noface_dup = library / "files" / "noface_dup.jpg"
+    face_source.parent.mkdir(parents=True)
+
+    Image.new("RGB", (50, 50), color="orange").save(face_source)
+    shutil.copy2(face_source, face_dup)
+    Image.new("RGB", (50, 50), color="blue").save(noface_source)
+    shutil.copy2(noface_source, noface_dup)
+
+    dt = datetime(2024, 5, 1, 12, 0, 0)
+    repo.save_media(
+        _media(str(face_source), checksum="c1", size_bytes=5000, capture_datetime=dt)
+    )
+    repo.save_media(
+        _media(str(face_dup), checksum="c2", size_bytes=1000, capture_datetime=dt)
+    )
+    repo.save_media(
+        _media(str(noface_source), checksum="c3", size_bytes=5000, capture_datetime=dt)
+    )
+    repo.save_media(
+        _media(str(noface_dup), checksum="c4", size_bytes=1000, capture_datetime=dt)
+    )
+
+    # Add a face only to one member of the face group.
+    repo.save_face(
+        Face(
+            id="face-1",
+            media_id=repo.get_by_checksum("c1").id,
+            bbox=(0, 0, 10, 10),
+            embedding=[0.1, 0.2, 0.3],
+            detection_confidence=0.9,
+        )
+    )
+
+    cli_config.state["library"] = str(library)
+    runner.invoke(app, ["dedupe"])
+    result = runner.invoke(app, ["dedupe", "--list", "--only-faces"])
+    cli_config.state["library"] = None
+
+    assert result.exit_code == 0
+    assert "Duplicate groups: 1" in result.output
+    assert "face_source.jpg" in result.output
+    assert "noface_source.jpg" not in result.output

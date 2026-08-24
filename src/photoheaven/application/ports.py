@@ -64,6 +64,11 @@ class MediaRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def get_media_id_by_path(self, path: str) -> Optional[str]:
+        """Return the media id that currently owns *path*, if any."""
+        raise NotImplementedError
+
+    @abstractmethod
     def save_media(self, media: MediaFile) -> None:
         """Persist a media file."""
         raise NotImplementedError

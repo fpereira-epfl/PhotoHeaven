@@ -188,6 +188,12 @@ class FakeRepository(MediaRepository):
         if media is not None:
             media.path = new_path
 
+    def get_media_id_by_path(self, path: str) -> str | None:
+        for media in self.media.values():
+            if media.path == path:
+                return media.id
+        return None
+
     def clear_duplicate_groups(self) -> None:
         pass
 

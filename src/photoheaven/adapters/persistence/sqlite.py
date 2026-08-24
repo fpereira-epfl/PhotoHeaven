@@ -371,6 +371,11 @@ class SqliteMediaRepository(MediaRepository):
             row = session.query(_MediaFileORM).filter_by(checksum=checksum).first()
             return _media_to_domain(row) if row else None
 
+    def get_media_id_by_path(self, path: str) -> Optional[str]:
+        with self._session() as session:
+            row = session.query(_MediaFileORM.id).filter_by(path=path).first()
+            return row[0] if row else None
+
     def save_media(self, media: MediaFile) -> None:
         """Persist a media file, updating in place and keeping faces linked.
 
@@ -842,7 +847,7 @@ class SqliteMediaRepository(MediaRepository):
         - ``group_id`` (str)
         - ``created_at`` (datetime)
         - ``members`` (list of dicts with media_id, path, size_bytes,
-          is_primary, match_level)
+          checksum, is_primary, match_level)
         """
         with self._session() as session:
             groups = (
@@ -859,6 +864,7 @@ class SqliteMediaRepository(MediaRepository):
                         _DuplicateGroupMemberORM.match_level,
                         _MediaFileORM.path,
                         _MediaFileORM.size_bytes,
+                        _MediaFileORM.checksum,
                     )
                     .join(
                         _MediaFileORM,
@@ -876,6 +882,7 @@ class SqliteMediaRepository(MediaRepository):
                                 "media_id": row.media_id,
                                 "path": row.path,
                                 "size_bytes": row.size_bytes,
+                                "checksum": row.checksum,
                                 "is_primary": bool(row.is_primary),
                                 "match_level": row.match_level,
                             }

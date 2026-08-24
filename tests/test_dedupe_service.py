@@ -73,6 +73,12 @@ class _FakeDedupeRepository:
             if item.id == media_id:
                 item.path = new_path
 
+    def get_media_id_by_path(self, path: str) -> str | None:
+        for item in self._items:
+            if item.path == path:
+                return item.id
+        return None
+
     def clear_duplicate_groups(self) -> None:
         self._groups = []
 
@@ -82,7 +88,26 @@ class _FakeDedupeRepository:
         self._groups.append({"group_id": group_id, "members": members})
 
     def list_duplicate_groups(self) -> list[dict]:
-        return self._groups
+        return [
+            {
+                "group_id": g["group_id"],
+                "created_at": None,
+                "members": [
+                    {
+                        "media_id": m["media_id"],
+                        "path": item.path,
+                        "size_bytes": item.size_bytes,
+                        "checksum": item.checksum,
+                        "is_primary": m.get("is_primary", False),
+                        "match_level": m["match_level"],
+                    }
+                    for m in g["members"]
+                    for item in self._items
+                    if item.id == m["media_id"]
+                ],
+            }
+            for g in self._groups
+        ]
 
 
 def test_finds_checksum_duplicates() -> None:

@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
+from photoheaven.adapters.integrity.hasher import Blake3Hasher
 from photoheaven.adapters.integrity.perceptual_hasher import PerceptualHasher
 from photoheaven.application.ports import MediaRepository
 from photoheaven.domain.models import MediaFile, MediaType
@@ -55,6 +56,7 @@ class DedupeMoveResult:
     groups_processed: int = 0
     files_moved: int = 0
     files_missing: int = 0
+    files_reconciled: int = 0
     groups_with_errors: int = 0
 
 
@@ -96,9 +98,11 @@ class DedupeService:
         self,
         repository: MediaRepository,
         perceptual_hasher: PerceptualHasher,
+        hasher: Blake3Hasher | None = None,
     ) -> None:
         self.repository = repository
         self.perceptual_hasher = perceptual_hasher
+        self.hasher = hasher or Blake3Hasher()
 
     def find_duplicates(
         self,
@@ -218,7 +222,8 @@ class DedupeService:
 
         The database is updated to reflect the new paths, so ``--list`` and
         future scans continue to treat the moved files as duplicates of the
-        primary. The primary file is never moved.
+        primary. The primary file is never moved. Renamed duplicates from
+        earlier runs are reconciled by checksum after moving.
         """
         result = DedupeMoveResult()
         groups = self.list_duplicate_groups()
@@ -270,6 +275,15 @@ class DedupeService:
                         # Source and target are the same file; nothing to do.
                         continue
 
+                    if source.parent.resolve() == group_target_dir.resolve():
+                        # File is already in the correct duplicates folder,
+                        # likely under a different name chosen in a previous
+                        # run. Reconcile the path and leave it alone.
+                        self.repository.update_media_path(
+                            member["media_id"], str(source)
+                        )
+                        continue
+
                     shutil.move(str(source), str(target))
                     self.repository.update_media_path(
                         member["media_id"], str(target)
@@ -291,7 +305,72 @@ class DedupeService:
                 result.groups_with_errors += 1
             self._notify(progress_callback, progress)
 
+        # Reconcile any members whose recorded path no longer exists but whose
+        # file is still present in the target folder under a different name
+        # (legacy damage from earlier runs that renamed duplicates).
+        result.files_reconciled = self._reconcile_renamed_duplicates(
+            duplicates_root
+        )
+
         return result
+
+    def _reconcile_renamed_duplicates(self, duplicates_root: Path) -> int:
+        """Update DB paths for duplicates that were renamed in place.
+
+        Returns the number of paths reconciled.
+        """
+        reconciled = 0
+        checksum_cache: dict[Path, str] = {}
+
+        for group in self.list_duplicate_groups():
+            for member in group["members"]:
+                if member.get("is_primary"):
+                    continue
+                source = Path(member["path"])
+                if source.exists():
+                    continue
+
+                primary = group["members"][0]
+                primary_path = Path(primary["path"])
+                year, month = self._resolve_year_month(primary_path)
+                group_target_dir = duplicates_root / year / month
+                if not group_target_dir.exists():
+                    continue
+
+                expected_checksum = member.get("checksum")
+                if not expected_checksum:
+                    continue
+
+                for candidate in group_target_dir.iterdir():
+                    if not candidate.is_file():
+                        continue
+                    if candidate.name == primary_path.name:
+                        continue
+                    if candidate not in checksum_cache:
+                        try:
+                            checksum_cache[candidate] = self.hasher.hash_file(
+                                candidate
+                            )
+                        except Exception:
+                            continue
+                    if checksum_cache[candidate] != expected_checksum:
+                        continue
+
+                    # Make sure the candidate path is not already claimed by
+                    # another media record.
+                    existing_id = self.repository.get_media_id_by_path(
+                        str(candidate)
+                    )
+                    if existing_id is not None and existing_id != member["media_id"]:
+                        continue
+
+                    self.repository.update_media_path(
+                        member["media_id"], str(candidate)
+                    )
+                    reconciled += 1
+                    break
+
+        return reconciled
 
     @staticmethod
     def _resolve_year_month(path: Path) -> tuple[str, str]:

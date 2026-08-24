@@ -821,6 +821,7 @@ def dedupe(
     service = DedupeService(
         repository=repository,
         perceptual_hasher=PerceptualHasher(),
+        hasher=Blake3Hasher(),
     )
 
     if list_:
@@ -879,6 +880,11 @@ def dedupe(
         move_table.add_column("Count", justify="right", style="magenta")
         move_table.add_row("Groups processed", str(move_result.groups_processed))
         move_table.add_row("Files moved", str(move_result.files_moved))
+        if move_result.files_reconciled:
+            move_table.add_row(
+                "Paths reconciled",
+                f"[green]{move_result.files_reconciled}[/green]",
+            )
         if move_result.files_missing:
             move_table.add_row(
                 "Files already gone/missing",

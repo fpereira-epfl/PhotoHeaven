@@ -159,7 +159,7 @@ def test_finds_perceptual_duplicates_across_formats(tmp_path: Path) -> None:
     assert result.perceptual_matches >= 1
 
 
-def test_finds_metadata_duplicates(tmp_path: Path) -> None:
+def test_metadata_similarity_does_not_create_false_positives(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     a = tmp_path / "a.jpg"
     b = tmp_path / "b.jpg"
@@ -178,8 +178,7 @@ def test_finds_metadata_duplicates(tmp_path: Path) -> None:
     service = DedupeService(repo, PerceptualHasher())
     result = service.find_duplicates(max_distance=0)
 
-    assert result.groups_created == 1
-    assert result.metadata_matches == 1
+    assert result.groups_created == 0
 
 
 def test_prefers_heic_as_primary(tmp_path: Path) -> None:

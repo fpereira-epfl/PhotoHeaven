@@ -838,7 +838,6 @@ def dedupe(
     table.add_row("Perceptual hashes computed", str(result.hashes_computed))
     table.add_row("Checksum matches", str(result.checksum_matches))
     table.add_row("Perceptual matches", str(result.perceptual_matches))
-    table.add_row("Metadata matches", str(result.metadata_matches))
     console.print(table)
 
 

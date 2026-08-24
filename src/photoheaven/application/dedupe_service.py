@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -45,7 +45,6 @@ class DedupeResult:
     hashes_computed: int = 0
     checksum_matches: int = 0
     perceptual_matches: int = 0
-    metadata_matches: int = 0
 
 
 @dataclass
@@ -86,7 +85,14 @@ class DedupeService:
         max_distance: int = 5,
         progress_callback: Optional[Callable[[DedupeProgress], None]] = None,
     ) -> DedupeResult:
-        """Scan the library and store duplicate groups."""
+        """Scan the library and store duplicate groups.
+
+        Matches are based only on strong evidence: identical checksums or
+        similar perceptual hashes. Metadata alone (capture time, camera,
+        size) is intentionally NOT used, because burst-mode photos and
+        near-simultaneous shots share those properties but are different
+        images.
+        """
         if reset:
             self.repository.clear_duplicate_groups()
 
@@ -125,9 +131,6 @@ class DedupeService:
         result.checksum_matches = sum(1 for _, _, lvl in edges if lvl == "checksum")
         result.perceptual_matches = sum(
             1 for _, _, lvl in edges if lvl == "perceptual"
-        )
-        result.metadata_matches = sum(
-            1 for _, _, lvl in edges if lvl == "metadata"
         )
 
         groups = self._build_groups(items, edges)
@@ -243,7 +246,12 @@ class DedupeService:
     def _match_level(
         self, a: _DedupeItem, b: _DedupeItem, max_distance: int
     ) -> str | None:
-        """Return the strongest duplicate match level, or None."""
+        """Return the strongest duplicate match level, or None.
+
+        Only checksums and perceptual hashes are considered. Metadata such as
+        capture datetime and camera model is deliberately ignored, because it
+        produces false positives for burst photos and rapid sequences.
+        """
         if a.media.checksum == b.media.checksum:
             return "checksum"
 
@@ -266,31 +274,7 @@ class DedupeService:
                     b.media.id,
                 )
 
-        if self._metadata_match(a.media, b.media):
-            return "metadata"
-
         return None
-
-    def _metadata_match(self, a: MediaFile, b: MediaFile) -> bool:
-        """Return True if EXIF/file metadata strongly suggests a duplicate."""
-        if a.capture_datetime is None or b.capture_datetime is None:
-            return False
-        if abs(a.capture_datetime - b.capture_datetime) > timedelta(seconds=1):
-            return False
-        if not _same_text(a.make, b.make):
-            return False
-        if not _same_text(a.model, b.model):
-            return False
-
-        # Size tolerance: within 5% or within 100 bytes.
-        larger = max(a.size_bytes, b.size_bytes)
-        if larger == 0:
-            return a.size_bytes == b.size_bytes
-        size_diff = abs(a.size_bytes - b.size_bytes)
-        if size_diff <= max(larger * 0.05, 100):
-            return True
-
-        return False
 
     def _build_groups(
         self, items: list[_DedupeItem], edges: list[tuple[str, str, str]]
@@ -353,11 +337,6 @@ class DedupeService:
         return (ext not in {".heic", ".heif"}, primary["size_bytes"], path.name)
 
 
-def _same_text(a: str | None, b: str | None) -> bool:
-    """Case-insensitive, whitespace-normalised text comparison."""
-    return (a or "").strip().lower() == (b or "").strip().lower()
-
-
 def _level_rank(level: str) -> int:
     """Higher rank = stronger evidence."""
-    return {"metadata": 1, "perceptual": 2, "checksum": 3}.get(level, 0)
+    return {"perceptual": 2, "checksum": 3}.get(level, 0)

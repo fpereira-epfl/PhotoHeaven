@@ -56,6 +56,7 @@ class _FakeDedupeRepository:
         self._items = items
         self._groups: list[dict] = []
         self._perceptual: dict[str, str] = {}
+        self._video_frame_hashes: dict[str, list[str]] = {}
 
     def list_media(self, limit: int = 100, offset: int = 0) -> list[MediaFile]:
         return self._items[offset : offset + limit]
@@ -67,6 +68,14 @@ class _FakeDedupeRepository:
         for item in self._items:
             if item.id == media_id:
                 item.perceptual_hash = perceptual_hash
+
+    def update_media_video_frame_hashes(
+        self, media_id: str, frame_hashes: list[str]
+    ) -> None:
+        self._video_frame_hashes[media_id] = frame_hashes
+        for item in self._items:
+            if item.id == media_id:
+                item.video_frame_hashes = frame_hashes
 
     def update_media_path(self, media_id: str, new_path: str) -> None:
         for item in self._items:

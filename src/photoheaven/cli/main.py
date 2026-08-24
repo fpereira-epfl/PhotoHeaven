@@ -18,6 +18,7 @@ from rich.table import Table
 
 from photoheaven.adapters.integrity.hasher import Blake3Hasher
 from photoheaven.adapters.integrity.perceptual_hasher import PerceptualHasher
+from photoheaven.adapters.integrity.video_frame_hasher import VideoFrameHasher
 from photoheaven.adapters.metadata.exif import FallbackMetadataExtractor
 from photoheaven.adapters.persistence.sqlite import SqliteMediaRepository
 from photoheaven.application.dedupe_service import (
@@ -803,6 +804,13 @@ def dedupe(
         False,
         "--only-faces",
         help="When listing, only show groups that contain at least one photo with a detected face.",
+        rich_help_panel="List filters",
+    ),
+    only_videos: bool = typer.Option(
+        False,
+        "--only-videos",
+        help="When listing, only show groups that contain at least one video.",
+        rich_help_panel="List filters",
     ),
     reset: bool = typer.Option(
         False,
@@ -819,6 +827,11 @@ def dedupe(
         5,
         "--max-distance",
         help="Maximum perceptual-hash Hamming distance for a match.",
+    ),
+    include_videos: bool = typer.Option(
+        False,
+        "--include-videos",
+        help="Also detect duplicate videos using keyframe perceptual hashing.",
     ),
     quiet: bool = typer.Option(
         False,
@@ -838,11 +851,14 @@ def dedupe(
     service = DedupeService(
         repository=repository,
         perceptual_hasher=PerceptualHasher(),
+        video_frame_hasher=VideoFrameHasher() if include_videos else None,
         hasher=Blake3Hasher(),
     )
 
     if list_:
-        groups = service.list_duplicate_groups(only_faces=only_faces)
+        groups = service.list_duplicate_groups(
+            only_faces=only_faces, only_videos=only_videos
+        )
         if not groups:
             console.print("[yellow]No duplicate groups found.[/yellow]")
             raise typer.Exit(0)
@@ -866,7 +882,9 @@ def dedupe(
             console.print()
         raise typer.Exit(0)
 
-    result = _run_dedupe_scan(service, reset, max_distance, quiet)
+    result = _run_dedupe_scan(
+        service, reset, max_distance, include_videos, quiet
+    )
 
     table = Table(title="Dedupe summary")
     table.add_column("Metric", style="cyan")
@@ -919,6 +937,7 @@ def _run_dedupe_scan(
     service: DedupeService,
     reset: bool,
     max_distance: int,
+    include_videos: bool,
     quiet: bool,
 ) -> Any:
     """Run deduplication with optional live progress display."""
@@ -926,6 +945,7 @@ def _run_dedupe_scan(
         return service.find_duplicates(
             reset=reset,
             max_distance=max_distance,
+            include_videos=include_videos,
             progress_callback=None,
         )
 
@@ -979,6 +999,7 @@ def _run_dedupe_scan(
         return service.find_duplicates(
             reset=reset,
             max_distance=max_distance,
+            include_videos=include_videos,
             progress_callback=_progress_callback,
         )
 

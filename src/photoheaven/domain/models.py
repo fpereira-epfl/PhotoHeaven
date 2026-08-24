@@ -56,6 +56,12 @@ class MediaFile:
     perceptual_hash: str | None = None
     """Hex perceptual hash (e.g. pHash) used for near-duplicate detection."""
 
+    duration_seconds: float | None = None
+    """Video duration in seconds, if known."""
+
+    video_frame_hashes: list[str] | None = None
+    """Perceptual hashes of sampled video keyframes."""
+
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 
@@ -66,7 +72,9 @@ class MediaFile:
             f"media_type={self.media_type}, gps=<redacted>, "
             f"face_analysis_at={self.face_analysis_at}, "
             f"metadata_extracted={self.metadata_extracted}, "
-            f"perceptual_hash={self.perceptual_hash!r})"
+            f"perceptual_hash={self.perceptual_hash!r}, "
+            f"duration_seconds={self.duration_seconds}, "
+            f"video_frame_hashes=<redacted>)"
         )
 
 

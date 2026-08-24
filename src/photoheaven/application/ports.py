@@ -36,6 +36,7 @@ class MediaMetadata:
         make: Optional[str] = None,
         model: Optional[str] = None,
         gps: Optional[GeoPoint] = None,
+        duration_seconds: Optional[float] = None,
         extracted: bool = True,
     ) -> None:
         self.media_type = media_type
@@ -43,6 +44,7 @@ class MediaMetadata:
         self.make = make
         self.model = model
         self.gps = gps
+        self.duration_seconds = duration_seconds
         self.extracted = extracted
 
 
@@ -282,6 +284,13 @@ class MediaRepository(ABC):
         self, media_id: str, perceptual_hash: str
     ) -> None:
         """Store the perceptual hash for a media file."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_media_video_frame_hashes(
+        self, media_id: str, frame_hashes: list[str]
+    ) -> None:
+        """Store perceptual hashes of sampled video keyframes."""
         raise NotImplementedError
 
     @abstractmethod

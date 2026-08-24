@@ -183,6 +183,13 @@ class FakeRepository(MediaRepository):
         if media is not None:
             media.perceptual_hash = perceptual_hash
 
+    def update_media_video_frame_hashes(
+        self, media_id: str, frame_hashes: list[str]
+    ) -> None:
+        media = self.media.get(media_id)
+        if media is not None:
+            media.video_frame_hashes = frame_hashes
+
     def update_media_path(self, media_id: str, new_path: str) -> None:
         media = self.media.get(media_id)
         if media is not None:

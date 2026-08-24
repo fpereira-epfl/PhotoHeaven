@@ -198,9 +198,15 @@ class VideoMetadataExtractor(MetadataExtractor):
             capture_datetime: Optional[datetime] = None
             make: Optional[str] = None
             model: Optional[str] = None
+            duration_seconds: Optional[float] = None
 
             for track in info.tracks:
                 if track.track_type == "General":
+                    if duration_seconds is None and track.duration:
+                        try:
+                            duration_seconds = float(track.duration) / 1000.0
+                        except (ValueError, TypeError):
+                            pass
                     if not capture_datetime and track.encoded_date:
                         parsed = self._parse_track_date(track.encoded_date)
                         if parsed:
@@ -210,6 +216,11 @@ class VideoMetadataExtractor(MetadataExtractor):
                         if parsed:
                             capture_datetime = parsed
                 elif track.track_type in {"Video", "Image"}:
+                    if duration_seconds is None and track.duration:
+                        try:
+                            duration_seconds = float(track.duration) / 1000.0
+                        except (ValueError, TypeError):
+                            pass
                     if not capture_datetime and track.encoded_date:
                         parsed = self._parse_track_date(track.encoded_date)
                         if parsed:
@@ -226,6 +237,7 @@ class VideoMetadataExtractor(MetadataExtractor):
                 make=make,
                 model=model,
                 gps=None,
+                duration_seconds=duration_seconds,
             )
         except Exception as exc:
             logger.warning("Video metadata extraction failed for %s: %s", path, exc)

@@ -131,12 +131,14 @@ class IngestionService:
             make = metadata.make
             model = metadata.model
             gps = metadata.gps
+            duration_seconds = metadata.duration_seconds
         else:
             metadata_extracted = False
             capture_datetime = None
             make = None
             model = None
             gps = None
+            duration_seconds = None
 
         if existing is not None:
             media = MediaFile(
@@ -154,6 +156,8 @@ class IngestionService:
                 face_analysis_version=existing.face_analysis_version,
                 metadata_extracted=metadata_extracted,
                 perceptual_hash=existing.perceptual_hash,
+                duration_seconds=duration_seconds,
+                video_frame_hashes=existing.video_frame_hashes,
                 created_at=existing.created_at,
                 updated_at=datetime.utcnow(),
             )
@@ -170,6 +174,7 @@ class IngestionService:
                 model=model,
                 gps=gps,
                 metadata_extracted=metadata_extracted,
+                duration_seconds=duration_seconds,
             )
 
         self.repository.save_media(media)

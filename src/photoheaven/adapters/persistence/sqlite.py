@@ -48,6 +48,8 @@ class _MediaFileORM(Base):
     face_analysis_version = Column(String, nullable=True)
     metadata_extracted = Column(Integer, nullable=False, default=1)
     perceptual_hash = Column(String(64), nullable=True, index=True)
+    duration_seconds = Column(Float, nullable=True)
+    video_frame_hashes = Column(String, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
@@ -106,6 +108,9 @@ def _media_to_domain(row: _MediaFileORM) -> MediaFile:
     gps = None
     if row.latitude is not None and row.longitude is not None:
         gps = GeoPoint(latitude=row.latitude, longitude=row.longitude)
+    frame_hashes = None
+    if row.video_frame_hashes:
+        frame_hashes = row.video_frame_hashes.split(",")
     return MediaFile(
         id=row.id,
         path=row.path,
@@ -121,6 +126,8 @@ def _media_to_domain(row: _MediaFileORM) -> MediaFile:
         face_analysis_version=row.face_analysis_version,
         metadata_extracted=bool(row.metadata_extracted),
         perceptual_hash=row.perceptual_hash,
+        duration_seconds=row.duration_seconds,
+        video_frame_hashes=frame_hashes,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -143,6 +150,12 @@ def _media_to_orm(media: MediaFile) -> _MediaFileORM:
         face_analysis_version=media.face_analysis_version,
         metadata_extracted=1 if media.metadata_extracted else 0,
         perceptual_hash=media.perceptual_hash,
+        duration_seconds=media.duration_seconds,
+        video_frame_hashes=(
+            ",".join(media.video_frame_hashes)
+            if media.video_frame_hashes
+            else None
+        ),
         created_at=media.created_at,
         updated_at=media.updated_at,
     )
@@ -347,6 +360,14 @@ def _migrate_schema(engine) -> None:
         Column("perceptual_hash", String(64), nullable=True),
     )
     _add_column_if_missing(
+        "media_files",
+        Column("duration_seconds", Float, nullable=True),
+    )
+    _add_column_if_missing(
+        "media_files",
+        Column("video_frame_hashes", String, nullable=True),
+    )
+    _add_column_if_missing(
         "faces",
         Column("identity_id", String(36), ForeignKey("identities.id"), nullable=True),
     )
@@ -414,6 +435,13 @@ class SqliteMediaRepository(MediaRepository):
                 existing.face_analysis_at = media.face_analysis_at
                 existing.face_analysis_version = media.face_analysis_version
                 existing.metadata_extracted = 1 if media.metadata_extracted else 0
+                existing.perceptual_hash = media.perceptual_hash
+                existing.duration_seconds = media.duration_seconds
+                existing.video_frame_hashes = (
+                    ",".join(media.video_frame_hashes)
+                    if media.video_frame_hashes
+                    else None
+                )
                 existing.updated_at = media.updated_at
             else:
                 session.add(_media_to_orm(media))
@@ -800,6 +828,17 @@ class SqliteMediaRepository(MediaRepository):
             media.updated_at = datetime.utcnow()
             session.commit()
 
+    def update_media_video_frame_hashes(
+        self, media_id: str, frame_hashes: list[str]
+    ) -> None:
+        with self._session() as session:
+            media = session.get(_MediaFileORM, media_id)
+            if media is None:
+                return
+            media.video_frame_hashes = ",".join(frame_hashes)
+            media.updated_at = datetime.utcnow()
+            session.commit()
+
     def clear_duplicate_groups(self) -> None:
         with self._session() as session:
             session.query(_DuplicateGroupMemberORM).delete(
@@ -865,6 +904,7 @@ class SqliteMediaRepository(MediaRepository):
                         _MediaFileORM.path,
                         _MediaFileORM.size_bytes,
                         _MediaFileORM.checksum,
+                        _MediaFileORM.media_type,
                     )
                     .join(
                         _MediaFileORM,
@@ -883,6 +923,7 @@ class SqliteMediaRepository(MediaRepository):
                                 "path": row.path,
                                 "size_bytes": row.size_bytes,
                                 "checksum": row.checksum,
+                                "media_type": row.media_type,
                                 "is_primary": bool(row.is_primary),
                                 "match_level": row.match_level,
                             }

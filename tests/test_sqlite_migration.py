@@ -69,4 +69,7 @@ def test_repository_migrates_missing_face_analysis_columns(
     assert "face_analysis_at" in columns
     assert "face_analysis_version" in columns
     assert "metadata_extracted" in columns
+    assert "perceptual_hash" in columns
+    assert "duration_seconds" in columns
+    assert "video_frame_hashes" in columns
     assert repository.count_media() == 0

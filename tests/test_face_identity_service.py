@@ -183,6 +183,11 @@ class FakeRepository(MediaRepository):
     ) -> None:
         pass
 
+    def update_media_video_frame_hashes(
+        self, media_id: str, frame_hashes: list[str]
+    ) -> None:
+        pass
+
     def update_media_path(self, media_id: str, new_path: str) -> None:
         pass
 

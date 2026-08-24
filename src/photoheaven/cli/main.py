@@ -197,7 +197,17 @@ def sync(
     service = _build_service(_get_db_path())
     files = _collect_files(target_path, recursive=True)
 
-    if not files:
+    library_package = cli_config.resolve_library_package()
+    duplicates_root = (
+        Path(library_package) / "duplicates"
+        if library_package is not None
+        else None
+    )
+    duplicate_files: list[Path] = []
+    if duplicates_root is not None and duplicates_root.exists():
+        duplicate_files = _collect_files(duplicates_root, recursive=True)
+
+    if not files and not duplicate_files:
         console.print("[yellow]No supported media files found.[/yellow]")
         raise typer.Exit(0)
 
@@ -216,7 +226,7 @@ def sync(
 
     if dry_run:
         hasher = Blake3Hasher()
-        for file_path in files:
+        for file_path in files + duplicate_files:
             seen_paths.add(str(file_path))
             try:
                 checksum = hasher.hash_file(file_path)
@@ -233,9 +243,13 @@ def sync(
 
         if prune:
             for media_path in service.repository.get_all_media_paths():
-                if str(media_path).startswith(str(target_path)) and not Path(
-                    media_path
-                ).exists():
+                if (
+                    str(media_path).startswith(str(target_path))
+                    or (
+                        duplicates_root is not None
+                        and str(media_path).startswith(str(duplicates_root))
+                    )
+                ) and not Path(media_path).exists():
                     counts["pruned"] += 1
     else:
         with Progress(
@@ -298,10 +312,13 @@ def sync(
         if prune:
             for media in service.repository.list_media(limit=1_000_000):
                 media_path = Path(media.path)
-                if (
-                    str(media_path).startswith(str(target_path))
-                    and not media_path.exists()
-                ):
+                is_in_library_tree = str(media_path).startswith(
+                    str(target_path)
+                ) or (
+                    duplicates_root is not None
+                    and str(media_path).startswith(str(duplicates_root))
+                )
+                if is_in_library_tree and not media_path.exists():
                     try:
                         service.repository.delete_media(media.id)
                         counts["pruned"] += 1

@@ -57,6 +57,7 @@ class _FakeDedupeRepository:
         self._groups: list[dict] = []
         self._perceptual: dict[str, str] = {}
         self._video_frame_hashes: dict[str, list[str]] = {}
+        self._durations: dict[str, float] = {}
 
     def list_media(self, limit: int = 100, offset: int = 0) -> list[MediaFile]:
         return self._items[offset : offset + limit]
@@ -77,6 +78,14 @@ class _FakeDedupeRepository:
             if item.id == media_id:
                 item.video_frame_hashes = frame_hashes
 
+    def update_media_duration_seconds(
+        self, media_id: str, duration_seconds: float
+    ) -> None:
+        self._durations[media_id] = duration_seconds
+        for item in self._items:
+            if item.id == media_id:
+                item.duration_seconds = duration_seconds
+
     def update_media_path(self, media_id: str, new_path: str) -> None:
         for item in self._items:
             if item.id == media_id:
@@ -91,10 +100,11 @@ class _FakeDedupeRepository:
     def clear_duplicate_groups(self) -> None:
         self._groups = []
 
-    def save_duplicate_group(
-        self, group_id: str, members: list[dict]
+    def save_duplicate_groups(
+        self, groups: list[tuple[str, list[dict]]]
     ) -> None:
-        self._groups.append({"group_id": group_id, "members": members})
+        for group_id, members in groups:
+            self._groups.append({"group_id": group_id, "members": members})
 
     def list_duplicate_groups(self) -> list[dict]:
         return [
@@ -107,6 +117,7 @@ class _FakeDedupeRepository:
                         "path": item.path,
                         "size_bytes": item.size_bytes,
                         "checksum": item.checksum,
+                        "media_type": item.media_type.value,
                         "is_primary": m.get("is_primary", False),
                         "match_level": m["match_level"],
                     }
@@ -411,3 +422,184 @@ def test_list_duplicate_groups_only_faces_filters_correctly() -> None:
     assert len(face_groups) == 1
     member_ids = {m["media_id"] for m in face_groups[0]["members"]}
     assert member_ids == {"m3", "m4"}
+
+
+def test_video_duplicates_require_matching_duration() -> None:
+    class _FakeVideoHasher:
+        def compute(self, path: Path):
+            from photoheaven.adapters.integrity.video_frame_hasher import (
+                VideoFrameHashResult,
+            )
+
+            return VideoFrameHashResult(frame_hashes=["sameframe"], duration_seconds=10.0)
+
+        def distance(self, hash_a: str, hash_b: str) -> int:
+            return 0
+
+    a = MediaFile(
+        id="v1",
+        path="/a.mov",
+        checksum="c1",
+        size_bytes=1000,
+        mtime=1.0,
+        media_type=MediaType.VIDEO,
+        capture_datetime=datetime(2024, 5, 1, 12, 0, 0),
+        duration_seconds=10.0,
+        video_frame_hashes=["sameframe"],
+    )
+    b = MediaFile(
+        id="v2",
+        path="/b.mov",
+        checksum="c2",
+        size_bytes=1000,
+        mtime=1.0,
+        media_type=MediaType.VIDEO,
+        capture_datetime=datetime(2024, 5, 1, 12, 0, 0),
+        duration_seconds=10.5,
+        video_frame_hashes=["sameframe"],
+    )
+    c = MediaFile(
+        id="v3",
+        path="/c.mov",
+        checksum="c3",
+        size_bytes=1000,
+        mtime=1.0,
+        media_type=MediaType.VIDEO,
+        capture_datetime=datetime(2024, 5, 1, 12, 0, 0),
+        duration_seconds=15.0,
+        video_frame_hashes=["sameframe"],
+    )
+
+    repo = _FakeDedupeRepository([a, b, c])
+    service = DedupeService(
+        repo, PerceptualHasher(), video_frame_hasher=_FakeVideoHasher()
+    )
+    service.find_duplicates(include_videos=True, max_duration_diff_seconds=0.5)
+    groups = service.list_duplicate_groups(only_videos=True)
+
+    assert len(groups) == 1
+    member_ids = {m["media_id"] for m in groups[0]["members"]}
+    assert member_ids == {"v1", "v2"}
+
+
+def test_missing_video_duration_is_backfilled_from_stream() -> None:
+    class _FakeVideoHasher:
+        def compute(self, path: Path):
+            from photoheaven.adapters.integrity.video_frame_hasher import (
+                VideoFrameHashResult,
+            )
+
+            durations = {"/a.mov": 10.0, "/b.mov": 10.1, "/c.mov": 15.0}
+            return VideoFrameHashResult(
+                frame_hashes=["sameframe"],
+                duration_seconds=durations.get(str(path)),
+            )
+
+        def distance(self, hash_a: str, hash_b: str) -> int:
+            return 0
+
+    a = MediaFile(
+        id="v1",
+        path="/a.mov",
+        checksum="c1",
+        size_bytes=1000,
+        mtime=1.0,
+        media_type=MediaType.VIDEO,
+        capture_datetime=datetime(2024, 5, 1, 12, 0, 0),
+        duration_seconds=None,
+        video_frame_hashes=["sameframe"],
+    )
+    b = MediaFile(
+        id="v2",
+        path="/b.mov",
+        checksum="c2",
+        size_bytes=1000,
+        mtime=1.0,
+        media_type=MediaType.VIDEO,
+        capture_datetime=datetime(2024, 5, 1, 12, 0, 0),
+        duration_seconds=None,
+        video_frame_hashes=["sameframe"],
+    )
+    c = MediaFile(
+        id="v3",
+        path="/c.mov",
+        checksum="c3",
+        size_bytes=1000,
+        mtime=1.0,
+        media_type=MediaType.VIDEO,
+        capture_datetime=datetime(2024, 5, 1, 12, 0, 0),
+        duration_seconds=None,
+        video_frame_hashes=["sameframe"],
+    )
+
+    repo = _FakeDedupeRepository([a, b, c])
+    service = DedupeService(
+        repo, PerceptualHasher(), video_frame_hasher=_FakeVideoHasher()
+    )
+    service.find_duplicates(include_videos=True, max_duration_diff_seconds=0.5)
+    groups = service.list_duplicate_groups(only_videos=True)
+
+    assert len(groups) == 1
+    member_ids = {m["media_id"] for m in groups[0]["members"]}
+    assert member_ids == {"v1", "v2"}
+    assert repo._durations == {"v1": 10.0, "v2": 10.1, "v3": 15.0}
+
+
+def test_video_duplicates_require_size_ratio() -> None:
+    class _FakeVideoHasher:
+        def compute(self, path: Path):
+            from photoheaven.adapters.integrity.video_frame_hasher import (
+                VideoFrameHashResult,
+            )
+
+            return VideoFrameHashResult(
+                frame_hashes=["sameframe"], duration_seconds=10.0
+            )
+
+        def distance(self, hash_a: str, hash_b: str) -> int:
+            return 0
+
+    a = MediaFile(
+        id="v1",
+        path="/a.mov",
+        checksum="c1",
+        size_bytes=1000,
+        mtime=1.0,
+        media_type=MediaType.VIDEO,
+        capture_datetime=datetime(2024, 5, 1, 12, 0, 0),
+        duration_seconds=10.0,
+        video_frame_hashes=["sameframe"],
+    )
+    b = MediaFile(
+        id="v2",
+        path="/b.mov",
+        checksum="c2",
+        size_bytes=1100,
+        mtime=1.0,
+        media_type=MediaType.VIDEO,
+        capture_datetime=datetime(2024, 5, 1, 12, 0, 0),
+        duration_seconds=10.0,
+        video_frame_hashes=["sameframe"],
+    )
+    c = MediaFile(
+        id="v3",
+        path="/c.mov",
+        checksum="c3",
+        size_bytes=3000,
+        mtime=1.0,
+        media_type=MediaType.VIDEO,
+        capture_datetime=datetime(2024, 5, 1, 12, 0, 0),
+        duration_seconds=10.0,
+        video_frame_hashes=["sameframe"],
+    )
+
+    repo = _FakeDedupeRepository([a, b, c])
+    service = DedupeService(
+        repo, PerceptualHasher(), video_frame_hasher=_FakeVideoHasher()
+    )
+    service.find_duplicates(include_videos=True, max_video_size_ratio=1.2)
+    groups = service.list_duplicate_groups(only_videos=True)
+
+    assert len(groups) == 1
+    member_ids = {m["media_id"] for m in groups[0]["members"]}
+    assert member_ids == {"v1", "v2"}

@@ -24,6 +24,18 @@ except Exception:  # pragma: no cover - optional deps may be missing
 logger = logging.getLogger(__name__)
 
 
+class VideoFrameHashResult:
+    """Result of computing perceptual hashes for sampled video keyframes."""
+
+    def __init__(
+        self,
+        frame_hashes: list[str],
+        duration_seconds: float | None = None,
+    ) -> None:
+        self.frame_hashes = frame_hashes
+        self.duration_seconds = duration_seconds
+
+
 class VideoFrameHasher:
     """Compute pHashes for a small set of keyframes extracted from a video."""
 
@@ -34,8 +46,8 @@ class VideoFrameHasher:
             )
         self.frame_count = frame_count
 
-    def compute(self, path: Path) -> list[str] | None:
-        """Return a list of pHash hex strings for sampled keyframes, or None."""
+    def compute(self, path: Path) -> VideoFrameHashResult | None:
+        """Return pHashes and duration for sampled keyframes, or None on failure."""
         try:
             cap = cv2.VideoCapture(str(path))  # type: ignore[attr-defined]
         except Exception as exc:
@@ -45,8 +57,10 @@ class VideoFrameHasher:
         try:
             frame_count_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))  # type: ignore[attr-defined]
             fps = cap.get(cv2.CAP_PROP_FPS)  # type: ignore[attr-defined]
-            duration_seconds = frame_count_total / fps if fps else 0
-            if frame_count_total <= 0 or duration_seconds <= 0:
+            duration_seconds: float | None = None
+            if fps:
+                duration_seconds = frame_count_total / fps
+            if frame_count_total <= 0 or not duration_seconds or duration_seconds <= 0:
                 logger.warning("Could not determine video duration for %s", path)
                 return None
 
@@ -67,7 +81,12 @@ class VideoFrameHasher:
                         path,
                         exc,
                     )
-            return hashes if hashes else None
+            if not hashes:
+                return None
+            return VideoFrameHashResult(
+                frame_hashes=hashes,
+                duration_seconds=duration_seconds,
+            )
         except Exception as exc:
             logger.warning(
                 "Could not compute video frame hashes for %s: %s", path, exc

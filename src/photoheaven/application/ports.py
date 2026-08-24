@@ -294,15 +294,23 @@ class MediaRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def update_media_duration_seconds(
+        self, media_id: str, duration_seconds: float
+    ) -> None:
+        """Store the video duration in seconds."""
+        raise NotImplementedError
+
+    @abstractmethod
     def clear_duplicate_groups(self) -> None:
         """Remove all stored duplicate groups."""
         raise NotImplementedError
 
     @abstractmethod
-    def save_duplicate_group(
-        self, group_id: str, members: list[dict]
-    ) -> None:
-        """Persist a duplicate group and its member links."""
+    def save_duplicate_groups(self, groups: list[tuple[str, list[dict]]]) -> None:
+        """Persist duplicate groups and their member links in one transaction.
+
+        Each item is a tuple of ``(group_id, members)``.
+        """
         raise NotImplementedError
 
     @abstractmethod

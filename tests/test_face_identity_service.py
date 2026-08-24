@@ -188,6 +188,11 @@ class FakeRepository(MediaRepository):
     ) -> None:
         pass
 
+
+    def update_media_duration_seconds(
+        self, media_id: str, duration_seconds: float
+    ) -> None:
+        pass
     def update_media_path(self, media_id: str, new_path: str) -> None:
         pass
 
@@ -197,8 +202,8 @@ class FakeRepository(MediaRepository):
     def clear_duplicate_groups(self) -> None:
         pass
 
-    def save_duplicate_group(
-        self, group_id: str, members: list[dict]
+    def save_duplicate_groups(
+        self, groups: list[tuple[str, list[dict]]]
     ) -> None:
         pass
 

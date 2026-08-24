@@ -107,6 +107,8 @@ class DedupeService:
         self.perceptual_hasher = perceptual_hasher
         self.video_frame_hasher = video_frame_hasher
         self.hasher = hasher or Blake3Hasher()
+        self._max_duration_diff_seconds = 1.0
+        self._max_video_size_ratio = 1.2
 
     def find_duplicates(
         self,
@@ -114,6 +116,8 @@ class DedupeService:
         reset: bool = False,
         max_distance: int = 5,
         include_videos: bool = False,
+        max_duration_diff_seconds: float = 1.0,
+        max_video_size_ratio: float = 1.2,
         progress_callback: Optional[Callable[[DedupeProgress], None]] = None,
     ) -> DedupeResult:
         """Scan the library and store duplicate groups.
@@ -129,7 +133,10 @@ class DedupeService:
 
         Videos are excluded unless ``include_videos`` is True. When included,
         video duplicates are detected by identical checksums or similar pHash
-        values computed from sampled keyframes.
+        values computed from sampled keyframes. Video perceptual matches also
+        require the durations to be within ``max_duration_diff_seconds`` and
+        the file sizes to be within ``max_video_size_ratio`` to avoid flagging
+        different takes or trimmed clips as duplicates.
         """
         self.repository.clear_duplicate_groups()
 
@@ -145,6 +152,11 @@ class DedupeService:
         self._ensure_perceptual_hashes(
             items, result, progress, progress_callback, include_videos=include_videos
         )
+        if include_videos:
+            self._ensure_video_durations(items, result, progress, progress_callback)
+
+        self._max_duration_diff_seconds = max_duration_diff_seconds
+        self._max_video_size_ratio = max_video_size_ratio
 
         buckets = self._bucket_items(items)
         progress.candidate_pairs_total = sum(
@@ -183,14 +195,17 @@ class DedupeService:
         )
 
         groups = self._build_groups(items, edges)
+        group_batches: list[tuple[str, list[dict]]] = []
         for group_items in groups:
             members = self._prepare_group_members(group_items, best_level)
-            self.repository.save_duplicate_group(str(uuid.uuid4()), members)
+            group_batches.append((str(uuid.uuid4()), members))
             result.groups_created += 1
             result.total_duplicates += len(members) - 1
             progress.groups_found = result.groups_created
             progress.duplicate_files_found = result.total_duplicates
             self._notify(progress_callback, progress)
+
+        self.repository.save_duplicate_groups(group_batches)
 
         # Ensure the UI shows 100% even if work finished between notify ticks.
         progress.hashes_done = progress.hashes_total
@@ -506,7 +521,7 @@ class DedupeService:
                     )
                     result.hashes_computed += 1
             elif include_videos and item.media.media_type == MediaType.VIDEO:
-                frame_hashes = self._compute_video_frame_hashes(path)
+                frame_hashes = self._compute_video_frame_hashes(path, item)
                 if frame_hashes is not None:
                     item.video_frame_hashes = frame_hashes
                     self.repository.update_media_video_frame_hashes(
@@ -516,11 +531,58 @@ class DedupeService:
             progress.hashes_done += 1
             self._notify(progress_callback, progress)
 
-    def _compute_video_frame_hashes(self, path: Path) -> list[str] | None:
-        """Compute keyframe pHashes for a video file."""
+    def _compute_video_frame_hashes(
+        self, path: Path, item: _DedupeItem
+    ) -> list[str] | None:
+        """Compute keyframe pHashes for a video file and update duration."""
+        result = self._compute_video_hash_result(path, item)
+        return result.frame_hashes if result is not None else None
+
+    def _compute_video_hash_result(
+        self, path: Path, item: _DedupeItem
+    ) -> "VideoFrameHashResult" | None:
+        """Compute keyframe pHashes and duration for a video file."""
         if self.video_frame_hasher is None:
             return None
-        return self.video_frame_hasher.compute(path)
+        result = self.video_frame_hasher.compute(path)
+        if result is None:
+            return None
+        if result.duration_seconds is not None:
+            item.media.duration_seconds = result.duration_seconds
+            self.repository.update_media_duration_seconds(
+                item.media.id, result.duration_seconds
+            )
+        return result
+
+    def _ensure_video_durations(
+        self,
+        items: list[_DedupeItem],
+        result: DedupeResult,
+        progress: DedupeProgress,
+        progress_callback: Optional[Callable[[DedupeProgress], None]],
+    ) -> None:
+        """Backfill missing video durations from the stream.
+
+        Videos that already have cached frame hashes may lack a duration
+        because earlier versions of the hasher did not store it. Open the
+        stream once to get duration and persist it.
+        """
+        video_items_missing_duration = [
+            item
+            for item in items
+            if item.media.media_type == MediaType.VIDEO
+            and item.media.duration_seconds is None
+        ]
+        if not video_items_missing_duration:
+            return
+        # Add to the hash task so the progress bar reflects the extra work.
+        progress.hashes_total += len(video_items_missing_duration)
+        self._notify(progress_callback, progress)
+        for item in video_items_missing_duration:
+            path = Path(item.media.path)
+            self._compute_video_hash_result(path, item)
+            progress.hashes_done += 1
+            self._notify(progress_callback, progress)
 
     def _bucket_items(
         self, items: list[_DedupeItem]
@@ -577,6 +639,10 @@ class DedupeService:
             and a.video_frame_hashes
             and b.video_frame_hashes
         ):
+            if not self._durations_match(a.media, b.media):
+                return None
+            if not self._video_sizes_match(a.media, b.media):
+                return None
             try:
                 if self._video_frames_match(
                     a.video_frame_hashes, b.video_frame_hashes, max_distance
@@ -590,6 +656,31 @@ class DedupeService:
                 )
 
         return None
+
+    def _video_sizes_match(self, a: MediaFile, b: MediaFile) -> bool:
+        """Return True if video file sizes are within the configured ratio."""
+        if a.size_bytes <= 0 or b.size_bytes <= 0:
+            return False
+        ratio = max(a.size_bytes, b.size_bytes) / min(a.size_bytes, b.size_bytes)
+        return ratio <= self._max_video_size_ratio
+
+    def _durations_match(self, a: MediaFile, b: MediaFile) -> bool:
+        """Return True if both videos have durations within tolerance.
+
+        If either video is missing a duration, we allow the match but log it,
+        so that bad metadata does not hide likely duplicates.
+        """
+        if a.duration_seconds is None or b.duration_seconds is None:
+            logger.debug(
+                "Missing duration for video pair %s / %s; allowing perceptual match",
+                a.id,
+                b.id,
+            )
+            return True
+        return (
+            abs(a.duration_seconds - b.duration_seconds)
+            <= self._max_duration_diff_seconds
+        )
 
     def _video_frames_match(
         self,

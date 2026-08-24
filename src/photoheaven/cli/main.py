@@ -833,6 +833,16 @@ def dedupe(
         "--include-videos",
         help="Also detect duplicate videos using keyframe perceptual hashing.",
     ),
+    max_duration_diff: float = typer.Option(
+        1.0,
+        "--max-duration-diff",
+        help="Maximum duration difference in seconds for video perceptual matches.",
+    ),
+    max_video_size_ratio: float = typer.Option(
+        1.2,
+        "--max-video-size-ratio",
+        help="Maximum size ratio (larger/smaller) for video perceptual matches.",
+    ),
     quiet: bool = typer.Option(
         False,
         "--quiet",
@@ -874,7 +884,7 @@ def dedupe(
                 f"(best: {primary_ext}, {_format_size(primary['size_bytes'])})[/bold cyan]"
             )
             for member in sorted_members:
-                marker = "[green]★ keep[/green]" if member["is_primary"] else "[yellow]  dup[/yellow]"
+                marker = "[green]★ keep[/green]" if member["is_primary"] else "[yellow]   dup[/yellow]"
                 size = _format_size(member["size_bytes"])
                 console.print(
                     f"  {marker} {member['path']}  [cyan]{size}[/cyan]"
@@ -883,7 +893,13 @@ def dedupe(
         raise typer.Exit(0)
 
     result = _run_dedupe_scan(
-        service, reset, max_distance, include_videos, quiet
+        service,
+        reset,
+        max_distance,
+        include_videos,
+        max_duration_diff,
+        max_video_size_ratio,
+        quiet,
     )
 
     table = Table(title="Dedupe summary")
@@ -938,6 +954,8 @@ def _run_dedupe_scan(
     reset: bool,
     max_distance: int,
     include_videos: bool,
+    max_duration_diff: float,
+    max_video_size_ratio: float,
     quiet: bool,
 ) -> Any:
     """Run deduplication with optional live progress display."""
@@ -946,6 +964,8 @@ def _run_dedupe_scan(
             reset=reset,
             max_distance=max_distance,
             include_videos=include_videos,
+            max_duration_diff_seconds=max_duration_diff,
+            max_video_size_ratio=max_video_size_ratio,
             progress_callback=None,
         )
 
@@ -1000,6 +1020,8 @@ def _run_dedupe_scan(
             reset=reset,
             max_distance=max_distance,
             include_videos=include_videos,
+            max_duration_diff_seconds=max_duration_diff,
+            max_video_size_ratio=max_video_size_ratio,
             progress_callback=_progress_callback,
         )
 

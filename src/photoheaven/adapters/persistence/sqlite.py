@@ -5,6 +5,7 @@ from __future__ import annotations
 import array
 import logging
 import shutil
+import time
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -21,6 +22,7 @@ from sqlalchemy import (
     distinct,
     func,
 )
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 from photoheaven.application.ports import MediaRepository
@@ -839,6 +841,17 @@ class SqliteMediaRepository(MediaRepository):
             media.updated_at = datetime.utcnow()
             session.commit()
 
+    def update_media_duration_seconds(
+        self, media_id: str, duration_seconds: float
+    ) -> None:
+        with self._session() as session:
+            media = session.get(_MediaFileORM, media_id)
+            if media is None:
+                return
+            media.duration_seconds = duration_seconds
+            media.updated_at = datetime.utcnow()
+            session.commit()
+
     def clear_duplicate_groups(self) -> None:
         with self._session() as session:
             session.query(_DuplicateGroupMemberORM).delete(
@@ -849,35 +862,57 @@ class SqliteMediaRepository(MediaRepository):
             )
             session.commit()
 
-    def save_duplicate_group(
+    def save_duplicate_groups(
         self,
-        group_id: str,
-        members: list[dict],
+        groups: list[tuple[str, list[dict]]],
     ) -> None:
-        """Persist a duplicate group and its members.
+        """Persist duplicate groups and their members in one transaction.
 
-        *members* is a list of dicts with keys:
+        *groups* is a list of ``(group_id, members)`` tuples. *members* is a
+        list of dicts with keys:
         - ``media_id`` (str)
         - ``is_primary`` (bool)
         - ``match_level`` (str: metadata/checksum/perceptual)
+
+        The transaction is retried a few times on transient disk I/O errors.
         """
-        with self._session() as session:
-            group = _DuplicateGroupORM(
-                id=group_id,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
-            )
-            session.add(group)
-            for member in members:
-                session.add(
-                    _DuplicateGroupMemberORM(
-                        group_id=group_id,
-                        media_id=member["media_id"],
-                        is_primary=1 if member.get("is_primary") else 0,
-                        match_level=member["match_level"],
-                    )
+        max_attempts = 5
+        base_delay = 0.2
+        last_exc: Exception | None = None
+
+        for attempt in range(max_attempts):
+            try:
+                with self._session() as session:
+                    for group_id, members in groups:
+                        group = _DuplicateGroupORM(
+                            id=group_id,
+                            created_at=datetime.utcnow(),
+                            updated_at=datetime.utcnow(),
+                        )
+                        session.add(group)
+                        for member in members:
+                            session.add(
+                                _DuplicateGroupMemberORM(
+                                    group_id=group_id,
+                                    media_id=member["media_id"],
+                                    is_primary=1 if member.get("is_primary") else 0,
+                                    match_level=member["match_level"],
+                                )
+                            )
+                    session.commit()
+                return
+            except OperationalError as exc:
+                last_exc = exc
+                logger.warning(
+                    "Duplicate group save failed (attempt %d/%d): %s",
+                    attempt + 1,
+                    max_attempts,
+                    exc,
                 )
-            session.commit()
+                if attempt < max_attempts - 1:
+                    time.sleep(base_delay * (2**attempt))
+        if last_exc is not None:
+            raise last_exc
 
     def list_duplicate_groups(self) -> list[dict]:
         """Return all duplicate groups with member details.

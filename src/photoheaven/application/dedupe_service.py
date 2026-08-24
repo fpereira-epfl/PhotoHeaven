@@ -114,9 +114,11 @@ class DedupeService:
         size) is intentionally NOT used, because burst-mode photos and
         near-simultaneous shots share those properties but are different
         images.
+
+        Duplicate groups are replaced on every run so stale groups from
+        previous scans do not accumulate.
         """
-        if reset:
-            self.repository.clear_duplicate_groups()
+        self.repository.clear_duplicate_groups()
 
         result = DedupeResult()
         progress = DedupeProgress()

@@ -293,6 +293,10 @@ class DedupeService:
             group_ok = True
             for member in members[1:]:
                 source = Path(member["path"])
+                # Skip files already living under the duplicates root. They
+                # were moved in a previous run and should not be moved again.
+                if self._is_under_duplicates_root(source, duplicates_root):
+                    continue
                 target = self._unique_target_path(
                     group_target_dir, source.name, primary_path.name
                 )
@@ -428,6 +432,15 @@ class DedupeService:
         # another DB lookup; use filesystem mtime as a reasonable approximation.
         mtime = datetime.fromtimestamp(path.stat().st_mtime)
         return f"{mtime.year:04d}", f"{mtime.month:02d}"
+
+    @staticmethod
+    def _is_under_duplicates_root(path: Path, duplicates_root: Path) -> bool:
+        """Return True if *path* is already inside the duplicates folder."""
+        try:
+            path.resolve().relative_to(duplicates_root.resolve())
+            return True
+        except ValueError:
+            return False
 
     @staticmethod
     def _unique_target_path(directory: Path, original_name: str, primary_name: str) -> Path:

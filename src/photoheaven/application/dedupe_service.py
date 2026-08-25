@@ -48,6 +48,7 @@ class DedupeResult:
     hashes_computed: int = 0
     checksum_matches: int = 0
     perceptual_matches: int = 0
+    failed_video_paths: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -300,6 +301,17 @@ class DedupeService:
                 target = self._unique_target_path(
                     group_target_dir, source.name, primary_path.name
                 )
+
+                if source.parent.resolve() == group_target_dir.resolve():
+                    # File is already in the correct duplicates folder,
+                    # likely under a different name chosen in a previous
+                    # run. Reconcile the path and leave it alone.
+                    if not dry_run:
+                        self.repository.update_media_path(
+                            member["media_id"], str(source)
+                        )
+                    continue
+
                 if dry_run:
                     result.files_moved += 1
                     progress.files_moved += 1
@@ -322,15 +334,6 @@ class DedupeService:
 
                     if source.resolve() == target.resolve():
                         # Source and target are the same file; nothing to do.
-                        continue
-
-                    if source.parent.resolve() == group_target_dir.resolve():
-                        # File is already in the correct duplicates folder,
-                        # likely under a different name chosen in a previous
-                        # run. Reconcile the path and leave it alone.
-                        self.repository.update_media_path(
-                            member["media_id"], str(source)
-                        )
                         continue
 
                     shutil.move(str(source), str(target))
@@ -534,7 +537,9 @@ class DedupeService:
                     )
                     result.hashes_computed += 1
             elif include_videos and item.media.media_type == MediaType.VIDEO:
-                frame_hashes = self._compute_video_frame_hashes(path, item)
+                frame_hashes, failed = self._compute_video_frame_hashes(path, item)
+                if failed:
+                    result.failed_video_paths.append(str(path))
                 if frame_hashes:
                     result.hashes_computed += 1
             progress.hashes_done += 1
@@ -542,23 +547,25 @@ class DedupeService:
 
     def _compute_video_frame_hashes(
         self, path: Path, item: _DedupeItem
-    ) -> list[str]:
+    ) -> tuple[list[str], bool]:
         """Compute keyframe pHashes for a video file and update duration.
 
-        Stores an empty list for corrupted or unhashable videos so they are
-        skipped on subsequent dedupe runs unless ``--force`` is used.
+        Returns the list of hashes and a boolean indicating whether hashing
+        failed in this call. Stores an empty list for corrupted or unhashable
+        videos so they are skipped on subsequent dedupe runs unless
+        ``--force`` is used.
         """
         result = self._compute_video_hash_result(path, item)
         if result is None:
             # Cache failure to avoid reprocessing corrupted videos every run.
             item.video_frame_hashes = []
             self.repository.update_media_video_frame_hashes(item.media.id, [])
-            return []
+            return [], True
         item.video_frame_hashes = result.frame_hashes
         self.repository.update_media_video_frame_hashes(
             item.media.id, result.frame_hashes
         )
-        return result.frame_hashes
+        return result.frame_hashes, False
 
     def _compute_video_hash_result(
         self, path: Path, item: _DedupeItem

@@ -924,6 +924,13 @@ def dedupe(
     table.add_row("Perceptual matches", str(result.perceptual_matches))
     console.print(table)
 
+    if result.failed_video_paths:
+        console.print(
+            f"[yellow]Could not hash {len(result.failed_video_paths)} video(s):[/yellow]"
+        )
+        for path in result.failed_video_paths:
+            console.print(f"  [yellow]- {path}[/yellow]")
+
     if move:
         library_package = cli_config.resolve_library_package()
         if library_package is None:

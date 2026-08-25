@@ -95,11 +95,11 @@ class VideoFrameHasher:
             with _silence_ffmpeg_stderr():
                 cap = cv2.VideoCapture(str(path))  # type: ignore[attr-defined]
         except Exception as exc:
-            logger.warning("Could not open video %s: %s", path, exc)
+            logger.debug("Could not open video %s: %s", path, exc)
             return None
 
         if not cap.isOpened():
-            logger.warning("Could not open video %s", path)
+            logger.debug("Could not open video %s", path)
             return None
 
         try:
@@ -108,7 +108,7 @@ class VideoFrameHasher:
                 # files often open successfully but fail immediately on decode.
                 ok, _ = cap.read()
                 if not ok:
-                    logger.warning("Could not decode first frame of %s", path)
+                    logger.debug("Could not decode first frame of %s", path)
                     return None
 
                 # Reset before querying properties; some containers report more
@@ -126,7 +126,7 @@ class VideoFrameHasher:
                     duration_seconds = _duration_from_mediainfo(path)
 
                 if not duration_seconds or duration_seconds <= 0:
-                    logger.warning("Could not determine video duration for %s", path)
+                    logger.debug("Could not determine video duration for %s", path)
                     return None
 
                 positions = self._sample_positions(duration_seconds)
@@ -152,7 +152,7 @@ class VideoFrameHasher:
                             exc,
                         )
                 if not hashes:
-                    logger.warning(
+                    logger.debug(
                         "Could not extract any hashable keyframes from %s", path
                     )
                     return None
@@ -161,7 +161,7 @@ class VideoFrameHasher:
                     duration_seconds=duration_seconds,
                 )
         except Exception as exc:
-            logger.warning(
+            logger.debug(
                 "Could not compute video frame hashes for %s: %s", path, exc
             )
             return None

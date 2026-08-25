@@ -185,6 +185,9 @@ class FakeRepository(MediaRepository):
             if media.path == path:
                 return media
         return None
+
+    def search_media(self, query):
+        return []
     def clear_duplicate_groups(self) -> None:
         pass
 

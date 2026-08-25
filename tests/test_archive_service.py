@@ -32,6 +32,9 @@ class FakeRepository:
                 return media
         return None
 
+
+    def search_media(self, query):
+        return []
     def delete_media(self, media_id: str) -> None:
         self.media.pop(media_id, None)
 

@@ -6,7 +6,7 @@ import logging
 import os
 import re
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
@@ -37,6 +37,7 @@ from photoheaven.application.dedupe_service import (
     DedupeProgress,
     DedupeService,
 )
+from photoheaven.application.ports import MediaSearchQuery
 from photoheaven.application.ingestion_service import IngestionService, guess_media_type
 from photoheaven.application.library_service import LibraryService
 from photoheaven.cli import config as cli_config
@@ -1016,6 +1017,131 @@ def dedupe(
                 f"[red]{move_result.groups_with_errors}[/red]",
             )
         console.print(move_table)
+
+
+@app.command()
+def search(
+    names: Optional[str] = typer.Option(
+        None,
+        "--names",
+        "-n",
+        help="Comma-separated identity/face names to search for.",
+    ),
+    year: Optional[int] = typer.Option(
+        None,
+        "--year",
+        "-Y",
+        help="Filter by capture year.",
+    ),
+    month: Optional[int] = typer.Option(
+        None,
+        "--month",
+        "-M",
+        help="Filter by capture month (requires --year).",
+    ),
+    date_from: Optional[str] = typer.Option(
+        None,
+        "--from",
+        help="Start date as YYYY-MM.",
+    ),
+    date_to: Optional[str] = typer.Option(
+        None,
+        "--to",
+        help="End date as YYYY-MM.",
+    ),
+    include_videos: bool = typer.Option(
+        False,
+        "--include-videos",
+        help="Include videos in search results.",
+    ),
+    limit: int = typer.Option(
+        100,
+        "--limit",
+        help="Maximum number of results to return.",
+    ),
+    include_duplicates: bool = typer.Option(
+        False,
+        "--include-duplicates",
+        help="Also include files under <library>/duplicates.",
+    ),
+) -> None:
+    """Search photos (and optionally videos) by faces and capture date."""
+    if month is not None and year is None:
+        console.print("[red]--month requires --year[/red]")
+        raise typer.Exit(1)
+
+    parsed_from: Optional[datetime] = None
+    parsed_to: Optional[datetime] = None
+
+    if date_from:
+        try:
+            parsed_from = datetime.strptime(date_from, "%Y-%m")
+        except ValueError:
+            console.print(f"[red]Invalid --from date: {date_from} (expected YYYY-MM)[/red]")
+            raise typer.Exit(1)
+
+    if date_to:
+        try:
+            year_to, month_to = map(int, date_to.split("-"))
+            last_day = _last_day_of_month(year_to, month_to)
+            parsed_to = datetime(year_to, month_to, last_day, 23, 59, 59)
+        except ValueError:
+            console.print(f"[red]Invalid --to date: {date_to} (expected YYYY-MM)[/red]")
+            raise typer.Exit(1)
+
+    name_list: Optional[list[str]] = None
+    if names:
+        name_list = [n.strip() for n in names.split(",") if n.strip()]
+
+    library_package = cli_config.resolve_library_package()
+    exclude_prefixes: list[str] = []
+    if library_package is not None and not include_duplicates:
+        exclude_prefixes.append(str(Path(library_package) / "duplicates"))
+
+    query = MediaSearchQuery(
+        names=name_list,
+        year=year,
+        month=month,
+        date_from=parsed_from,
+        date_to=parsed_to,
+        include_videos=include_videos,
+        limit=limit,
+        exclude_path_prefixes=exclude_prefixes,
+    )
+
+    db = _get_db_path()
+    repository = SqliteMediaRepository(db)
+    results = repository.search_media(query)
+
+    if not results:
+        console.print("[yellow]No matching media found.[/yellow]")
+        raise typer.Exit(0)
+
+    console.print(f"[bold cyan]Search results ({len(results)}):[/bold cyan]\n")
+    for media in results:
+        date_str = (
+            media.capture_datetime.strftime("%Y-%m-%d %H:%M")
+            if media.capture_datetime
+            else "—"
+        )
+        console.print(
+            f"[cyan]{date_str}[/cyan]  "
+            f"[magenta]{media.media_type.value}[/magenta]  "
+            f"[green]{_format_size(media.size_bytes)}[/green]"
+        )
+        # Print the path on its own line so the terminal can recognise it as a
+        # clickable file path and it is never cropped by a table column.
+        console.print(media.path)
+        console.print()
+
+
+def _last_day_of_month(year: int, month: int) -> int:
+    """Return the last day of the given month."""
+    if month == 12:
+        next_month = datetime(year + 1, 1, 1)
+    else:
+        next_month = datetime(year, month + 1, 1)
+    return (next_month - timedelta(days=1)).day
 
 
 def _run_dedupe_scan(

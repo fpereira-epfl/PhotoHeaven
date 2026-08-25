@@ -20,12 +20,15 @@ from sqlalchemy import (
     String,
     create_engine,
     distinct,
+    extract,
     func,
+    not_,
+    or_,
 )
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
-from photoheaven.application.ports import MediaRepository
+from photoheaven.application.ports import MediaRepository, MediaSearchQuery
 from photoheaven.domain.models import Face, GeoPoint, Identity, MediaFile, MediaType
 
 logger = logging.getLogger(__name__)
@@ -849,6 +852,62 @@ class SqliteMediaRepository(MediaRepository):
                 }
                 for row in rows
             ]
+
+    def search_media(self, query: MediaSearchQuery) -> list[MediaFile]:
+        """Return media files matching the given search criteria."""
+        with self._session() as session:
+            q = session.query(_MediaFileORM).distinct()
+
+            if query.names:
+                q = (
+                    q.join(_FaceORM, _MediaFileORM.id == _FaceORM.media_id)
+                    .outerjoin(
+                        _IdentityORM, _FaceORM.identity_id == _IdentityORM.id
+                    )
+                    .filter(
+                        or_(
+                            _IdentityORM.name.in_(query.names),
+                            _FaceORM.identity_name.in_(query.names),
+                        )
+                    )
+                )
+
+            if not query.include_videos:
+                q = q.filter(_MediaFileORM.media_type == MediaType.IMAGE.value)
+
+            for prefix in query.exclude_path_prefixes:
+                q = q.filter(not_(_MediaFileORM.path.startswith(prefix)))
+
+            if query.year is not None:
+                q = q.filter(
+                    _MediaFileORM.capture_datetime.isnot(None),
+                    extract("year", _MediaFileORM.capture_datetime) == query.year,
+                )
+
+            if query.month is not None:
+                q = q.filter(
+                    extract("month", _MediaFileORM.capture_datetime)
+                    == query.month
+                )
+
+            if query.date_from is not None:
+                q = q.filter(
+                    _MediaFileORM.capture_datetime.isnot(None),
+                    _MediaFileORM.capture_datetime >= query.date_from,
+                )
+
+            if query.date_to is not None:
+                q = q.filter(
+                    _MediaFileORM.capture_datetime.isnot(None),
+                    _MediaFileORM.capture_datetime <= query.date_to,
+                )
+
+            q = q.order_by(
+                _MediaFileORM.capture_datetime.desc().nulls_last(),
+                _MediaFileORM.path.asc(),
+            ).limit(query.limit)
+
+            return [_media_to_domain(row) for row in q.all()]
 
     def update_media_perceptual_hash(
         self, media_id: str, perceptual_hash: str

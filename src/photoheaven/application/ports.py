@@ -6,6 +6,7 @@ Adapters live outside this layer and implement these interfaces.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -55,6 +56,20 @@ class MetadataExtractor(ABC):
     def extract(self, path: Path, media_type: MediaType) -> MediaMetadata:
         """Return metadata for the given file."""
         raise NotImplementedError
+
+
+@dataclass
+class MediaSearchQuery:
+    """Query parameters for searching media files."""
+
+    names: Optional[list[str]] = None
+    year: Optional[int] = None
+    month: Optional[int] = None
+    date_from: Optional[datetime] = None
+    date_to: Optional[datetime] = None
+    include_videos: bool = False
+    limit: int = 100
+    exclude_path_prefixes: list[str] = field(default_factory=list)
 
 
 class MediaRepository(ABC):
@@ -326,6 +341,11 @@ class MediaRepository(ABC):
         ``members``. Each member dict contains ``media_id``, ``path``,
         ``size_bytes``, ``is_primary``, and ``match_level``.
         """
+        raise NotImplementedError
+
+    @abstractmethod
+    def search_media(self, query: MediaSearchQuery) -> list[MediaFile]:
+        """Return media files matching the given search criteria."""
         raise NotImplementedError
 
 

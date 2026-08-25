@@ -13,7 +13,14 @@ from typing import Any, Optional
 import typer
 from rich.console import Console
 from rich.live import Live
-from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
+from rich.progress import (
+    BarColumn,
+    FileSizeColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TransferSpeedColumn,
+)
 from rich.table import Table
 
 from photoheaven.adapters.integrity.hasher import Blake3Hasher
@@ -21,6 +28,10 @@ from photoheaven.adapters.integrity.perceptual_hasher import PerceptualHasher
 from photoheaven.adapters.integrity.video_frame_hasher import VideoFrameHasher
 from photoheaven.adapters.metadata.exif import FallbackMetadataExtractor
 from photoheaven.adapters.persistence.sqlite import SqliteMediaRepository
+from photoheaven.application.archive_service import (
+    ArchiveProgress,
+    ArchiveService,
+)
 from photoheaven.application.dedupe_service import (
     DedupeMoveProgress,
     DedupeProgress,
@@ -866,6 +877,11 @@ def dedupe(
         "--dry-run",
         help="Show what would be moved without moving files.",
     ),
+    archive: Optional[str] = typer.Option(
+        None,
+        "--archive",
+        help="Archive all files in <library>/duplicates to an external path.",
+    ),
 ) -> None:
     """Find duplicate photos/videos using checksum and perceptual hash."""
     db = _get_db_path()
@@ -876,6 +892,46 @@ def dedupe(
         video_frame_hasher=VideoFrameHasher() if include_videos else None,
         hasher=Blake3Hasher(),
     )
+
+    library_package = cli_config.resolve_library_package()
+    if library_package is None:
+        console.print("[red]Could not resolve library package path.[/red]")
+        raise typer.Exit(1)
+    duplicates_root = Path(library_package) / "duplicates"
+
+    if archive:
+        archive_path = Path(archive).expanduser().resolve()
+        archive_service = ArchiveService(
+            repository=repository, hasher=Blake3Hasher()
+        )
+        if quiet or dry_run:
+            archive_result = archive_service.archive_duplicates(
+                duplicates_root, archive_path, dry_run=dry_run
+            )
+        else:
+            archive_result = _run_archive(
+                archive_service, duplicates_root, archive_path, dry_run=dry_run
+            )
+
+        archive_table = Table(title="Archive summary")
+        archive_table.add_column("Metric", style="cyan")
+        archive_table.add_column("Count", justify="right", style="magenta")
+        archive_table.add_row("Files archived", str(archive_result.files_archived))
+        archive_table.add_row("Files skipped", str(archive_result.files_skipped))
+        archive_table.add_row("Files failed", str(archive_result.files_failed))
+        archive_table.add_row("Files removed", str(archive_result.files_removed))
+        archive_table.add_row("Dirs removed", str(archive_result.dirs_removed))
+        archive_table.add_row(
+            "Bytes transferred", _format_size(archive_result.bytes_transferred)
+        )
+        console.print(archive_table)
+        if archive_result.failed_files:
+            console.print(
+                f"[yellow]Failed files ({len(archive_result.failed_files)}):[/yellow]"
+            )
+            for path in archive_result.failed_files:
+                console.print(f"  [yellow]- {path}[/yellow]")
+        raise typer.Exit(0)
 
     if list_:
         groups = service.list_duplicate_groups(
@@ -932,12 +988,6 @@ def dedupe(
             console.print(f"  [yellow]- {path}[/yellow]")
 
     if move:
-        library_package = cli_config.resolve_library_package()
-        if library_package is None:
-            console.print("[red]Could not resolve library package path.[/red]")
-            raise typer.Exit(1)
-        duplicates_root = Path(library_package) / "duplicates"
-
         if quiet or dry_run:
             move_result = service.move_duplicates(
                 duplicates_root, dry_run=dry_run
@@ -1083,6 +1133,67 @@ def _run_dedupe_move(
     with Live(progress, console=console, refresh_per_second=8, transient=True):
         return service.move_duplicates(
             duplicates_root,
+            progress_callback=_progress_callback,
+        )
+
+
+def _run_archive(
+    service: ArchiveService,
+    duplicates_root: Path,
+    archive_root: Path,
+    *,
+    dry_run: bool,
+) -> Any:
+    """Run duplicate archiving with a live progress display."""
+    progress_state = ArchiveProgress()
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TextColumn("{task.fields[info]}"),
+        TransferSpeedColumn(),
+        FileSizeColumn(),
+        console=console,
+        transient=True,
+    )
+    file_task = progress.add_task(
+        "Archiving files", total=1, info="scanning..."
+    )
+    byte_task = progress.add_task(
+        "Bytes transferred", total=1, info="0 B"
+    )
+
+    def _progress_callback(snapshot: ArchiveProgress) -> None:
+        progress_state.stage = snapshot.stage
+        progress_state.total_files = snapshot.total_files
+        progress_state.files_done = snapshot.files_done
+        progress_state.current_file = snapshot.current_file
+        progress_state.bytes_total = snapshot.bytes_total
+        progress_state.bytes_done = snapshot.bytes_done
+        progress_state.errors = snapshot.errors
+
+        progress.update(
+            file_task,
+            total=max(snapshot.total_files, 1),
+            completed=snapshot.files_done,
+            info=(
+                f"{snapshot.files_done}/{snapshot.total_files} files, "
+                f"{snapshot.errors} errors"
+            ),
+        )
+        progress.update(
+            byte_task,
+            total=max(snapshot.bytes_total, 1),
+            completed=snapshot.bytes_done,
+            info=_format_size(snapshot.bytes_done),
+        )
+
+    with Live(progress, console=console, refresh_per_second=8, transient=True):
+        return service.archive_duplicates(
+            duplicates_root,
+            archive_root,
+            dry_run=dry_run,
             progress_callback=_progress_callback,
         )
 

@@ -73,6 +73,8 @@ class MediaSearchQuery:
     month: int | None = None
     date_from: datetime | None = None
     date_to: datetime | None = None
+    country: str | None = None
+    scene: str | None = None
     include_videos: bool = False
     limit: int = 100
     exclude_path_prefixes: list[str] = field(default_factory=list)
@@ -423,6 +425,14 @@ class MediaRepository(ABC):
     def search_media(self, query: MediaSearchQuery) -> list[MediaFile]:
         """Return media files matching the given search criteria."""
         raise NotImplementedError
+
+    def get_place_labels(self) -> dict[str, list[str]]:
+        """Return distinct place labels available for search.
+
+        Returns a dict with keys ``countries`` and ``scenes``.
+        Adapters may override this; the default returns empty lists.
+        """
+        return {"countries": [], "scenes": []}
 
 
 class FaceAnalyzer(ABC):

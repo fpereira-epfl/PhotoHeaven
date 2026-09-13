@@ -1104,10 +1104,27 @@ def search(
         "--to",
         help="End date as YYYY-MM.",
     ),
+    country: str | None = typer.Option(
+        None,
+        "--country",
+        "-c",
+        help="Filter by detected country (case-insensitive).",
+    ),
+    scene: str | None = typer.Option(
+        None,
+        "--scene",
+        "-s",
+        help="Filter by detected scene (case-insensitive).",
+    ),
     include_videos: bool = typer.Option(
         False,
         "--include-videos",
         help="Include videos in search results.",
+    ),
+    list_places: bool = typer.Option(
+        False,
+        "--list-places",
+        help="Show distinct countries and scenes, then exit.",
     ),
     limit: int = typer.Option(
         100,
@@ -1120,7 +1137,7 @@ def search(
         help="Also include files under <library>/duplicates.",
     ),
 ) -> None:
-    """Search photos (and optionally videos) by faces and capture date."""
+    """Search photos (and optionally videos) by faces, capture date, and place."""
     if month is not None and year is None:
         console.print("[red]--month requires --year[/red]")
         raise typer.Exit(1)
@@ -1159,6 +1176,8 @@ def search(
         month=month,
         date_from=parsed_from,
         date_to=parsed_to,
+        country=country,
+        scene=scene,
         include_videos=include_videos,
         limit=limit,
         exclude_path_prefixes=exclude_prefixes,
@@ -1166,6 +1185,24 @@ def search(
 
     db = _get_db_path()
     repository = SqliteMediaRepository(db)
+
+    if list_places:
+        labels = repository.get_place_labels()
+
+        country_table = Table(title="Countries")
+        country_table.add_column("Country", style="green")
+        for label in labels["countries"]:
+            country_table.add_row(label)
+
+        scene_table = Table(title="Scenes")
+        scene_table.add_column("Scene", style="magenta")
+        for label in labels["scenes"]:
+            scene_table.add_row(label)
+
+        console.print(country_table)
+        console.print(scene_table)
+        raise typer.Exit(0)
+
     results = repository.search_media(query)
 
     if not results:
@@ -1187,6 +1224,28 @@ def search(
         # Print the path on its own line so the terminal can recognise it as a
         # clickable file path and it is never cropped by a table column.
         console.print(media.path)
+
+        faces = repository.list_faces_for_media(media.id)
+        persons = sorted(
+            {face.identity_name for face in faces if face.identity_name}
+        )
+        place_record = repository.get_place_record(media.id)
+        country = place_record.country if place_record else None
+        scene = place_record.scene if place_record else None
+
+        details: list[str] = []
+        if persons:
+            details.append(
+                f"[yellow]Persons:[/yellow] {', '.join(persons)}"
+            )
+        place_parts = [part for part in (country, scene) if part]
+        if place_parts:
+            details.append(
+                f"[blue]Place:[/blue] {' / '.join(place_parts)}"
+            )
+        if details:
+            console.print("  ".join(details))
+
         console.print()
 
 

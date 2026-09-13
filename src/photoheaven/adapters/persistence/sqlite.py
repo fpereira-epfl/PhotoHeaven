@@ -1047,19 +1047,23 @@ class SqliteMediaRepository(MediaRepository):
         with self._session() as session:
             q = session.query(_MediaFileORM).distinct()
 
-            if query.names:
-                q = (
-                    q.join(_FaceORM, _MediaFileORM.id == _FaceORM.media_id)
+            # Require every requested name to be present on the same media file.
+            for name in query.names or []:
+                has_name = (
+                    session.query(_FaceORM)
                     .outerjoin(
                         _IdentityORM, _FaceORM.identity_id == _IdentityORM.id
                     )
                     .filter(
+                        _FaceORM.media_id == _MediaFileORM.id,
                         or_(
-                            _IdentityORM.name.in_(query.names),
-                            _FaceORM.identity_name.in_(query.names),
-                        )
+                            _IdentityORM.name == name,
+                            _FaceORM.identity_name == name,
+                        ),
                     )
+                    .exists()
                 )
+                q = q.filter(has_name)
 
             if not query.include_videos:
                 q = q.filter(_MediaFileORM.media_type == MediaType.IMAGE.value)
@@ -1079,6 +1083,19 @@ class SqliteMediaRepository(MediaRepository):
                     == query.month
                 )
 
+            if query.country is not None or query.scene is not None:
+                q = q.join(
+                    _PlaceRecordORM, _MediaFileORM.id == _PlaceRecordORM.media_id
+                )
+                if query.country is not None:
+                    q = q.filter(
+                        func.lower(_PlaceRecordORM.country) == query.country.lower()
+                    )
+                if query.scene is not None:
+                    q = q.filter(
+                        func.lower(_PlaceRecordORM.scene) == query.scene.lower()
+                    )
+
             if query.date_from is not None:
                 q = q.filter(
                     _MediaFileORM.capture_datetime.isnot(None),
@@ -1097,6 +1114,27 @@ class SqliteMediaRepository(MediaRepository):
             ).limit(query.limit)
 
             return [_media_to_domain(row) for row in q.all()]
+
+    def get_place_labels(self) -> dict[str, list[str]]:
+        """Return distinct countries and scenes stored in place records."""
+        with self._session() as session:
+            countries = [
+                row[0]
+                for row in session.query(_PlaceRecordORM.country)
+                .filter(_PlaceRecordORM.country.isnot(None))
+                .distinct()
+                .order_by(_PlaceRecordORM.country)
+                .all()
+            ]
+            scenes = [
+                row[0]
+                for row in session.query(_PlaceRecordORM.scene)
+                .filter(_PlaceRecordORM.scene.isnot(None))
+                .distinct()
+                .order_by(_PlaceRecordORM.scene)
+                .all()
+            ]
+            return {"countries": countries, "scenes": scenes}
 
     def update_media_perceptual_hash(
         self, media_id: str, perceptual_hash: str

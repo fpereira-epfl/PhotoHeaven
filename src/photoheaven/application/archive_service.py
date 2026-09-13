@@ -6,9 +6,9 @@ import logging
 import os
 import shutil
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
 
 from photoheaven.adapters.integrity.hasher import Blake3Hasher
 from photoheaven.application.ports import MediaRepository
@@ -76,7 +76,7 @@ class ArchiveService:
         archive_root: Path,
         *,
         dry_run: bool = False,
-        progress_callback: Optional[Callable[[ArchiveProgress], None]] = None,
+        progress_callback: Callable[[ArchiveProgress], None] | None = None,
     ) -> ArchiveResult:
         """Move all files from *source_root* into *archive_root*."""
         source_root = source_root.resolve()
@@ -144,20 +144,20 @@ class ArchiveService:
         self, source_path: Path, target_path: Path, *, dry_run: bool
     ) -> bool:
         """Archive a single file. Returns True if data was copied, False if skipped."""
-        source_checksum = self._source_checksum(source_path)
+        source_checksum, media_id = self._source_checksum_and_id(source_path)
         temp_path = target_path.with_name(target_path.name + ".pharchive")
 
         # Already archived to the exact target path.
         if target_path.exists():
             if self._same_file(source_path, target_path):
                 if not dry_run:
-                    self._remove_source(source_path)
+                    self._remove_source(source_path, media_id)
                 return False
 
             target_checksum = self._hash_file_with_retries(target_path)
             if target_checksum == source_checksum:
                 if not dry_run:
-                    self._remove_source(source_path)
+                    self._remove_source(source_path, media_id)
                 return False
 
             # Different content at the target path: archive under a unique name
@@ -172,7 +172,7 @@ class ArchiveService:
             if temp_checksum == source_checksum:
                 if not dry_run:
                     self._replace_file(temp_path, target_path)
-                    self._remove_source(source_path)
+                    self._remove_source(source_path, media_id)
                 return False
             # Partial/corrupt temp file: remove it and copy again.
             if not dry_run:
@@ -189,19 +189,19 @@ class ArchiveService:
                 f"Checksum mismatch after copying {source_path} to {temp_path}"
             )
         self._replace_file(temp_path, target_path)
-        self._remove_source(source_path)
+        self._remove_source(source_path, media_id)
         return True
 
-    def _source_checksum(self, path: Path) -> str:
-        """Return the checksum for *path*, preferring the DB record."""
+    def _source_checksum_and_id(self, path: Path) -> tuple[str, str | None]:
+        """Return the checksum for *path* and its DB media id, if known."""
         media = self.repository.get_by_path(str(path))
         if media is not None and media.checksum:
-            return media.checksum
-        return self._hash_file_with_retries(path)
+            return media.checksum, media.id
+        return self._hash_file_with_retries(path), None
 
     def _hash_file_with_retries(self, path: Path) -> str:
         """Compute a file checksum with transient-error retries."""
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
         for attempt in range(self.max_retries):
             try:
                 return self.hasher.hash_file(path)
@@ -216,7 +216,7 @@ class ArchiveService:
 
     def _copy_file_with_retries(self, source: Path, destination: Path) -> None:
         """Copy *source* to *destination*, retrying on transient errors."""
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
         for attempt in range(self.max_retries):
             try:
                 self._copy_file(source, destination)
@@ -245,16 +245,21 @@ class ArchiveService:
         """Atomically move *source* to *target*, even across filesystems."""
         shutil.move(str(source), str(target))
 
-    def _remove_source(self, source_path: Path) -> None:
+    def _remove_source(
+        self, source_path: Path, media_id: str | None = None
+    ) -> None:
         """Delete the source file and its DB record."""
         try:
             if source_path.exists():
                 source_path.unlink()
         except OSError as exc:
             logger.warning("Could not remove source file %s: %s", source_path, exc)
-        media = self.repository.get_by_path(str(source_path))
-        if media is not None:
-            self.repository.delete_media(media.id)
+        if media_id is not None:
+            self.repository.delete_media(media_id)
+        else:
+            media = self.repository.get_by_path(str(source_path))
+            if media is not None:
+                self.repository.delete_media(media.id)
 
     def _same_file(self, a: Path, b: Path) -> bool:
         """Return True if *a* and *b* point to the same filesystem object."""
@@ -292,7 +297,7 @@ class ArchiveService:
 
     def _notify(
         self,
-        callback: Optional[Callable[[ArchiveProgress], None]],
+        callback: Callable[[ArchiveProgress], None] | None,
         progress: ArchiveProgress,
     ) -> None:
         if callback is not None:

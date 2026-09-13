@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Optional
 
 
 class MediaType(Enum):
@@ -40,15 +39,21 @@ class MediaFile:
     size_bytes: int
     mtime: float
     media_type: MediaType = MediaType.UNKNOWN
-    capture_datetime: Optional[datetime] = None
-    make: Optional[str] = None
-    model: Optional[str] = None
-    gps: Optional[GeoPoint] = None
+    capture_datetime: datetime | None = None
+    make: str | None = None
+    model: str | None = None
+    gps: GeoPoint | None = None
     face_analysis_at: datetime | None = None
     """When face detection was last run on this file. None means not yet analysed."""
 
     face_analysis_version: str | None = None
     """Identifier of the face analysis pipeline/version used."""
+
+    place_analysis_at: datetime | None = None
+    """When place/scene detection was last run on this file. None means not yet analysed."""
+
+    place_analysis_version: str | None = None
+    """Identifier of the place analysis pipeline/version used."""
 
     metadata_extracted: bool = True
     """False when metadata extraction failed (e.g. corrupt/unreadable file)."""
@@ -71,6 +76,7 @@ class MediaFile:
             f"checksum={self.checksum!r}, size_bytes={self.size_bytes}, "
             f"media_type={self.media_type}, gps=<redacted>, "
             f"face_analysis_at={self.face_analysis_at}, "
+            f"place_analysis_at={self.place_analysis_at}, "
             f"metadata_extracted={self.metadata_extracted}, "
             f"perceptual_hash={self.perceptual_hash!r}, "
             f"duration_seconds={self.duration_seconds}, "
@@ -122,4 +128,29 @@ class Face:
             f"cluster_label={self.cluster_label}, "
             f"identity_id={self.identity_id!r}, "
             f"identity_name={self.identity_name!r})"
+        )
+
+
+@dataclass
+class PlaceRecord:
+    """A country/scene classification for a media file."""
+
+    media_id: str
+    country: str | None = None
+    country_source: str | None = None
+    """How the country was determined, e.g. 'gps' or 'visual'."""
+
+    country_confidence: float | None = None
+    scene: str | None = None
+    scene_confidence: float | None = None
+    analyzed_at: datetime = field(default_factory=datetime.utcnow)
+    version: str = "unknown"
+
+    def __repr__(self) -> str:
+        return (
+            f"PlaceRecord(media_id={self.media_id!r}, "
+            f"country={self.country!r}, country_source={self.country_source!r}, "
+            f"country_confidence={self.country_confidence}, "
+            f"scene={self.scene!r}, scene_confidence={self.scene_confidence}, "
+            f"version={self.version!r})"
         )

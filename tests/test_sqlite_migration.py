@@ -68,8 +68,19 @@ def test_repository_migrates_missing_face_analysis_columns(
 
     assert "face_analysis_at" in columns
     assert "face_analysis_version" in columns
+    assert "place_analysis_at" in columns
+    assert "place_analysis_version" in columns
     assert "metadata_extracted" in columns
     assert "perceptual_hash" in columns
     assert "duration_seconds" in columns
     assert "video_frame_hashes" in columns
+
+    with repository.engine.begin() as conn:
+        tables = {
+            row[0]
+            for row in conn.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+    assert "place_records" in tables
     assert repository.count_media() == 0

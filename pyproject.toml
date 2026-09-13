@@ -51,6 +51,12 @@ dependencies = [
     "onnxruntime>=1.17",
     "opencv-python-headless>=4.8",
 
+    # Place / scene identification
+    "reverse-geocoder>=1.5",
+    "pycountry>=22.0",
+    "torch>=2.2",
+    "torchvision>=0.17",
+
     # Clustering / numeric helpers
     "scikit-learn>=1.4",
     "numpy>=1.26",

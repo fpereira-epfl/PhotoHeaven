@@ -9,9 +9,15 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
-from photoheaven.domain.models import Face, GeoPoint, Identity, MediaFile, MediaType
+from photoheaven.domain.models import (
+    Face,
+    GeoPoint,
+    Identity,
+    MediaFile,
+    MediaType,
+    PlaceRecord,
+)
 
 
 class Hasher(ABC):
@@ -33,11 +39,11 @@ class MediaMetadata:
     def __init__(
         self,
         media_type: MediaType = MediaType.UNKNOWN,
-        capture_datetime: Optional[datetime] = None,
-        make: Optional[str] = None,
-        model: Optional[str] = None,
-        gps: Optional[GeoPoint] = None,
-        duration_seconds: Optional[float] = None,
+        capture_datetime: datetime | None = None,
+        make: str | None = None,
+        model: str | None = None,
+        gps: GeoPoint | None = None,
+        duration_seconds: float | None = None,
         extracted: bool = True,
     ) -> None:
         self.media_type = media_type
@@ -62,11 +68,11 @@ class MetadataExtractor(ABC):
 class MediaSearchQuery:
     """Query parameters for searching media files."""
 
-    names: Optional[list[str]] = None
-    year: Optional[int] = None
-    month: Optional[int] = None
-    date_from: Optional[datetime] = None
-    date_to: Optional[datetime] = None
+    names: list[str] | None = None
+    year: int | None = None
+    month: int | None = None
+    date_from: datetime | None = None
+    date_to: datetime | None = None
     include_videos: bool = False
     limit: int = 100
     exclude_path_prefixes: list[str] = field(default_factory=list)
@@ -76,17 +82,17 @@ class MediaRepository(ABC):
     """Persistence port for media files and faces."""
 
     @abstractmethod
-    def get_by_checksum(self, checksum: str) -> Optional[MediaFile]:
+    def get_by_checksum(self, checksum: str) -> MediaFile | None:
         """Return the media file with the given checksum, if any."""
         raise NotImplementedError
 
     @abstractmethod
-    def get_media_id_by_path(self, path: str) -> Optional[str]:
+    def get_media_id_by_path(self, path: str) -> str | None:
         """Return the media id that currently owns *path*, if any."""
         raise NotImplementedError
 
     @abstractmethod
-    def get_by_path(self, path: str) -> Optional[MediaFile]:
+    def get_by_path(self, path: str) -> MediaFile | None:
         """Return the media file at the given path, if any."""
         raise NotImplementedError
 
@@ -109,6 +115,15 @@ class MediaRepository(ABC):
     def list_media(self, limit: int = 100, offset: int = 0) -> list[MediaFile]:
         """Return a paginated list of media files."""
         raise NotImplementedError
+
+    def list_media_random(self, limit: int = 100) -> list[MediaFile]:
+        """Return up to *limit* media files in random order.
+
+        Adapters that support database-level random ordering should override
+        this. The default implementation returns the first *limit* rows from
+        ``list_media`` and is therefore not random.
+        """
+        return self.list_media(limit=limit, offset=0)
 
     @abstractmethod
     def get_all_media_paths(self) -> list[str]:
@@ -151,6 +166,58 @@ class MediaRepository(ABC):
         self, media_id: str, analyzed_at: datetime, version: str
     ) -> None:
         """Mark a media file as having been analysed for faces."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_unprocessed_places_media(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[MediaFile]:
+        """Return media files that have not yet had place analysis run."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_media_place_analysis(
+        self, media_id: str, analyzed_at: datetime, version: str
+    ) -> None:
+        """Mark a media file as having been analysed for places."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def save_place_record(self, record: PlaceRecord) -> None:
+        """Persist a place record for a media file."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_place_record(self, media_id: str) -> PlaceRecord | None:
+        """Return the place record for a media file, if any."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def count_place_records(self) -> int:
+        """Return the number of place records in the library."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_place_records_summary(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[dict]:
+        """Return a paginated summary of place records.
+
+        Each item is a dict with keys:
+        - ``media_id`` (str)
+        - ``path`` (str)
+        - ``country`` (str | None)
+        - ``country_source`` (str | None)
+        - ``scene`` (str | None)
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def reset_place_analysis(self) -> int:
+        """Clear all place records and reset place-analysis flags.
+
+        Returns the number of media files that were reset.
+        """
         raise NotImplementedError
 
     @abstractmethod
@@ -294,6 +361,15 @@ class MediaRepository(ABC):
         """Delete a media file record and its linked faces."""
         raise NotImplementedError
 
+    def delete_media_batch(self, media_ids: list[str]) -> None:
+        """Delete multiple media records and their linked data.
+
+        The default implementation deletes one by one; adapters may override
+        this with a more efficient bulk operation.
+        """
+        for media_id in media_ids:
+            self.delete_media(media_id)
+
     @abstractmethod
     def get_identity_photo_counts(self) -> dict[str, int]:
         """Return a mapping of identity name to distinct-photo count."""
@@ -361,4 +437,19 @@ class FaceAnalyzer(ABC):
     @abstractmethod
     def analyze(self, media: MediaFile) -> list[Face]:
         """Return all faces detected in *media*."""
+        raise NotImplementedError
+
+
+class PlaceIdentifier(ABC):
+    """Identifies the country and scene context for a media file."""
+
+    @property
+    @abstractmethod
+    def version(self) -> str:
+        """Return an identifier for the place identification pipeline."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def identify(self, media: MediaFile) -> PlaceRecord:
+        """Return country and scene predictions for *media*."""
         raise NotImplementedError

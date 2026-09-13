@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 import shutil
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
 
 from photoheaven.adapters.integrity.hasher import Blake3Hasher
 from photoheaven.adapters.integrity.perceptual_hasher import PerceptualHasher
@@ -119,7 +119,7 @@ class DedupeService:
         include_videos: bool = False,
         max_duration_diff_seconds: float = 1.0,
         max_video_size_ratio: float = 1.2,
-        progress_callback: Optional[Callable[[DedupeProgress], None]] = None,
+        progress_callback: Callable[[DedupeProgress], None] | None = None,
     ) -> DedupeResult:
         """Scan the library and store duplicate groups.
 
@@ -217,7 +217,7 @@ class DedupeService:
 
     @staticmethod
     def _notify(
-        callback: Optional[Callable[..., None]],
+        callback: Callable[..., None] | None,
         progress: DedupeProgress | DedupeMoveProgress,
     ) -> None:
         if callback is not None:
@@ -262,7 +262,7 @@ class DedupeService:
         duplicates_root: Path,
         *,
         dry_run: bool = False,
-        progress_callback: Optional[Callable[[DedupeMoveProgress], None]] = None,
+        progress_callback: Callable[[DedupeMoveProgress], None] | None = None,
     ) -> DedupeMoveResult:
         """Move non-primary duplicate files into ``duplicates_root/YYYY/MM``.
 
@@ -501,7 +501,7 @@ class DedupeService:
         items: list[_DedupeItem],
         result: DedupeResult,
         progress: DedupeProgress,
-        progress_callback: Optional[Callable[[DedupeProgress], None]],
+        progress_callback: Callable[[DedupeProgress], None] | None,
         *,
         include_videos: bool = False,
     ) -> None:
@@ -569,7 +569,7 @@ class DedupeService:
 
     def _compute_video_hash_result(
         self, path: Path, item: _DedupeItem
-    ) -> "VideoFrameHashResult" | None:
+    ) -> VideoFrameHashResult | None:
         """Compute keyframe pHashes and duration for a video file."""
         if self.video_frame_hasher is None:
             return None
@@ -588,7 +588,7 @@ class DedupeService:
         items: list[_DedupeItem],
         result: DedupeResult,
         progress: DedupeProgress,
-        progress_callback: Optional[Callable[[DedupeProgress], None]],
+        progress_callback: Callable[[DedupeProgress], None] | None,
     ) -> None:
         """Backfill missing video durations from the stream.
 

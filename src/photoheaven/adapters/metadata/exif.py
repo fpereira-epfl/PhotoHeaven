@@ -7,7 +7,6 @@ import re
 import warnings
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from PIL import ExifTags, Image
 
@@ -44,7 +43,7 @@ def _gps_value(gps_info: dict, *keys):
     return None
 
 
-def _extract_exif_gps(exif: dict) -> Optional[GeoPoint]:
+def _extract_exif_gps(exif: dict) -> GeoPoint | None:
     gps_info = exif.get("GPSInfo")
     if not gps_info or not isinstance(gps_info, dict):
         return None
@@ -62,7 +61,7 @@ def _extract_exif_gps(exif: dict) -> Optional[GeoPoint]:
         return None
 
 
-def _parse_exif_datetime(value: str) -> Optional[datetime]:
+def _parse_exif_datetime(value: str) -> datetime | None:
     """Parse common EXIF datetime string formats."""
     if not value or value in {"0000:00:00 00:00:00", "    :  :     :  :  "}:
         return None
@@ -76,7 +75,7 @@ def _parse_exif_datetime(value: str) -> Optional[datetime]:
         return None
 
 
-def _extract_exif_datetime(exif: dict) -> Optional[datetime]:
+def _extract_exif_datetime(exif: dict) -> datetime | None:
     for tag_name in _EXIF_DATE_TAGS:
         value = exif.get(tag_name)
         if value:
@@ -195,10 +194,10 @@ class VideoMetadataExtractor(MetadataExtractor):
             from pymediainfo import MediaInfo  # type: ignore
 
             info = MediaInfo.parse(str(path))
-            capture_datetime: Optional[datetime] = None
-            make: Optional[str] = None
-            model: Optional[str] = None
-            duration_seconds: Optional[float] = None
+            capture_datetime: datetime | None = None
+            make: str | None = None
+            model: str | None = None
+            duration_seconds: float | None = None
 
             for track in info.tracks:
                 if track.track_type == "General":
@@ -244,7 +243,7 @@ class VideoMetadataExtractor(MetadataExtractor):
             return MediaMetadata(media_type=MediaType.VIDEO)
 
     @staticmethod
-    def _parse_track_date(value: str) -> Optional[datetime]:
+    def _parse_track_date(value: str) -> datetime | None:
         # MediaInfo dates often look like "UTC 2023-01-15 10:30:00"
         # or "2023-01-15 10:30:00".
         value = value.strip()

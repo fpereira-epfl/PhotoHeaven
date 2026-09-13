@@ -8,7 +8,7 @@ import re
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -37,11 +37,12 @@ from photoheaven.application.dedupe_service import (
     DedupeProgress,
     DedupeService,
 )
-from photoheaven.application.ports import MediaSearchQuery
 from photoheaven.application.ingestion_service import IngestionService, guess_media_type
 from photoheaven.application.library_service import LibraryService
+from photoheaven.application.ports import MediaSearchQuery
 from photoheaven.cli import config as cli_config
 from photoheaven.cli.faces import faces_app
+from photoheaven.cli.places import places_app
 from photoheaven.domain.models import MediaFile
 
 logger = logging.getLogger(__name__)
@@ -51,14 +52,55 @@ app = typer.Typer(
     help="Organise, analyse, and face-cluster local photos and videos.",
     no_args_is_help=True,
     context_settings={"help_option_names": ["--help", "-h"]},
+    rich_markup_mode="rich",
 )
-app.add_typer(faces_app, name="faces")
 console = Console()
+
+# Desired display order in --help (grouped by panel).
+_PANEL_ORDER = [
+    "Library setup",
+    "Analysis",
+    "Discovery",
+    "Organisation",
+    "Maintenance",
+]
+_COMMAND_ORDER = {
+    "init": 0,
+    "import": 1,
+    "sync": 2,
+    "info": 3,
+    "inspect": 4,
+    "dedupe": 5,
+    "faces": 6,
+    "places": 7,
+    "search": 8,
+    "rename": 8,
+    "clean": 9,
+    "rebase": 10,
+    "version": 11,
+}
+
+
+def _sort_commands() -> None:
+    """Sort top-level commands and groups for the help output."""
+
+    def _key(cmd_or_group: Any) -> tuple[int, int]:
+        panel = getattr(cmd_or_group, "rich_help_panel", None) or ""
+        name = getattr(cmd_or_group, "name", None)
+        callback = getattr(cmd_or_group, "callback", None)
+        if not name and callback is not None:
+            name = getattr(callback, "__name__", None)
+        panel_index = _PANEL_ORDER.index(panel) if panel in _PANEL_ORDER else 99
+        command_index = _COMMAND_ORDER.get(name, 999) if name else 999
+        return panel_index, command_index
+
+    app.registered_commands.sort(key=_key)
+    app.registered_groups.sort(key=_key)
 
 
 @app.callback()
 def main(
-    library: Optional[str] = typer.Option(
+    library: str | None = typer.Option(
         None,
         "--library",
         envvar="PHOTOHEAVEN_LIBRARY",
@@ -119,7 +161,7 @@ def _get_db_path() -> str:
 
 
 def _resolve_target_path(
-    path: Optional[Path], *, command_name: str
+    path: Path | None, *, command_name: str
 ) -> Path:
     """Return the filesystem target for a command.
 
@@ -193,7 +235,7 @@ def _target_path_for_corrupted(
         n += 1
 
 
-@app.command()
+@app.command(rich_help_panel="Library setup")
 def sync(
     force: bool = typer.Option(
         False, "--force", help="Re-analyse files even if checksums match."
@@ -335,6 +377,7 @@ def sync(
                 progress.advance(task)
 
         if prune:
+            missing_ids: list[str] = []
             for media in service.repository.list_media(limit=1_000_000):
                 media_path = Path(media.path)
                 is_in_library_tree = str(media_path).startswith(
@@ -344,13 +387,19 @@ def sync(
                     and str(media_path).startswith(str(duplicates_root))
                 )
                 if is_in_library_tree and not media_path.exists():
-                    try:
-                        service.repository.delete_media(media.id)
-                        counts["pruned"] += 1
-                    except Exception:
-                        logger.exception(
-                            "Could not prune missing media %s", media.id
-                        )
+                    missing_ids.append(media.id)
+
+            batch_size = 500
+            for i in range(0, len(missing_ids), batch_size):
+                batch = missing_ids[i : i + batch_size]
+                try:
+                    service.repository.delete_media_batch(batch)
+                    counts["pruned"] += len(batch)
+                except Exception:
+                    logger.exception(
+                        "Could not prune batch of %d missing media records",
+                        len(batch),
+                    )
 
     table = Table(title="Sync summary")
     table.add_column("Status", style="cyan")
@@ -363,7 +412,7 @@ def sync(
         console.print("[yellow]Dry run — no changes were made.[/yellow]")
 
 
-@app.command(name="import")
+@app.command(name="import", rich_help_panel="Library setup")
 def import_(
     source: Path = typer.Argument(
         ..., help="External file or folder to import.", exists=True
@@ -500,13 +549,14 @@ def import_(
     console.print(table)
 
 
-@app.command()
+@app.command(rich_help_panel="Analysis")
 def info() -> None:
     """Show library statistics."""
     resolved_db = _get_db_path()
     repository = SqliteMediaRepository(resolved_db)
     media_count = repository.count_media()
     face_count = repository.count_faces()
+    place_count = repository.count_place_records()
 
     paths = repository.get_all_media_paths()
     photo_root = cli_config.resolve_photo_root(paths)
@@ -521,6 +571,7 @@ def info() -> None:
     table.add_row("Photo root", photo_root)
     table.add_row("Media files", str(media_count))
     table.add_row("Detected faces", str(face_count))
+    table.add_row("Place records", str(place_count))
     table.add_row("Database", resolved_db)
     console.print(table)
 
@@ -544,7 +595,7 @@ def _rebase_path(path: str, new_root: str) -> str:
     return f"{new_root}/{suffix}"
 
 
-@app.command()
+@app.command(rich_help_panel="Maintenance")
 def rebase(
     debug: bool = typer.Option(
         False, "--debug", help="Show why paths were left unchanged."
@@ -645,7 +696,7 @@ def rebase(
         console.print("[yellow]Dry run — no changes were made.[/yellow]")
 
 
-def _format_datetime(value: Optional[datetime]) -> str:
+def _format_datetime(value: datetime | None) -> str:
     if value is None:
         return "[dim]not available[/dim]"
     return value.isoformat(sep=" ", timespec="seconds")
@@ -759,9 +810,9 @@ def _show_folder(
     console.print(table)
 
 
-@app.command(name="inspect")
+@app.command(name="inspect", rich_help_panel="Analysis")
 def inspect(
-    input: Optional[Path] = typer.Option(
+    input: Path | None = typer.Option(
         None,
         "--input",
         "-i",
@@ -816,7 +867,7 @@ def _member_quality_key(member: dict) -> tuple:
     )
 
 
-@app.command()
+@app.command(rich_help_panel="Analysis")
 def dedupe(
     list_: bool = typer.Option(
         False,
@@ -878,7 +929,7 @@ def dedupe(
         "--dry-run",
         help="Show what would be moved without moving files.",
     ),
-    archive: Optional[str] = typer.Option(
+    archive: str | None = typer.Option(
         None,
         "--archive",
         help="Archive all files in <library>/duplicates to an external path.",
@@ -1019,32 +1070,36 @@ def dedupe(
         console.print(move_table)
 
 
-@app.command()
+app.add_typer(faces_app, name="faces", rich_help_panel="Analysis")
+app.add_typer(places_app, name="places", rich_help_panel="Analysis")
+
+
+@app.command(rich_help_panel="Discovery")
 def search(
-    names: Optional[str] = typer.Option(
+    names: str | None = typer.Option(
         None,
         "--names",
         "-n",
         help="Comma-separated identity/face names to search for.",
     ),
-    year: Optional[int] = typer.Option(
+    year: int | None = typer.Option(
         None,
         "--year",
         "-Y",
         help="Filter by capture year.",
     ),
-    month: Optional[int] = typer.Option(
+    month: int | None = typer.Option(
         None,
         "--month",
         "-M",
         help="Filter by capture month (requires --year).",
     ),
-    date_from: Optional[str] = typer.Option(
+    date_from: str | None = typer.Option(
         None,
         "--from",
         help="Start date as YYYY-MM.",
     ),
-    date_to: Optional[str] = typer.Option(
+    date_to: str | None = typer.Option(
         None,
         "--to",
         help="End date as YYYY-MM.",
@@ -1070,8 +1125,8 @@ def search(
         console.print("[red]--month requires --year[/red]")
         raise typer.Exit(1)
 
-    parsed_from: Optional[datetime] = None
-    parsed_to: Optional[datetime] = None
+    parsed_from: datetime | None = None
+    parsed_to: datetime | None = None
 
     if date_from:
         try:
@@ -1089,7 +1144,7 @@ def search(
             console.print(f"[red]Invalid --to date: {date_to} (expected YYYY-MM)[/red]")
             raise typer.Exit(1)
 
-    name_list: Optional[list[str]] = None
+    name_list: list[str] | None = None
     if names:
         name_list = [n.strip() for n in names.split(",") if n.strip()]
 
@@ -1356,7 +1411,7 @@ def _unique_target_name(
         n += 1
 
 
-@app.command()
+@app.command(rich_help_panel="Organisation")
 def rename(
     move: bool = typer.Option(
         False,
@@ -1537,7 +1592,7 @@ def _is_effectively_empty(directory: Path) -> tuple[bool, list[Path]]:
     return len(remaining) == 0, ignored
 
 
-@app.command()
+@app.command(rich_help_panel="Organisation")
 def clean(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="List empty directories without removing them."
@@ -1604,7 +1659,7 @@ def clean(
         console.print("[yellow]Dry run — no changes were made.[/yellow]")
 
 
-@app.command()
+@app.command(rich_help_panel="Library setup")
 def init() -> None:
     """Create a new self-contained PhotoHeaven library."""
     library = cli_config.state.get("library")
@@ -1629,9 +1684,13 @@ def init() -> None:
     console.print(f"Created library database at [cyan]{db_path}[/cyan]")
 
 
-@app.command()
+@app.command(rich_help_panel="Maintenance")
 def version() -> None:
     """Print the PhotoHeaven version."""
     from photoheaven import __version__
 
     console.print(f"PhotoHeaven {__version__}")
+
+
+# Apply the desired grouping and ordering to the help output.
+_sort_commands()

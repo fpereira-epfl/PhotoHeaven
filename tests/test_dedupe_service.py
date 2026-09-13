@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from PIL import Image

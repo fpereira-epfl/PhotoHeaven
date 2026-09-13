@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from photoheaven.application.face_clustering_service import FaceClusteringService
 from photoheaven.application.ports import MediaRepository
-from photoheaven.domain.models import Face
+from photoheaven.domain.models import Face, MediaFile, PlaceRecord
 
 
 class FakeRepository(MediaRepository):
@@ -51,6 +51,33 @@ class FakeRepository(MediaRepository):
         self, media_id: str, analyzed_at, version: str
     ) -> None:
         pass
+
+    def get_unprocessed_places_media(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[MediaFile]:
+        return []
+
+    def update_media_place_analysis(
+        self, media_id: str, analyzed_at, version: str
+    ) -> None:
+        pass
+
+    def save_place_record(self, record: PlaceRecord) -> None:
+        pass
+
+    def get_place_record(self, media_id: str) -> PlaceRecord | None:
+        return None
+
+    def count_place_records(self) -> int:
+        return 0
+
+    def list_place_records_summary(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[dict]:
+        return []
+
+    def reset_place_analysis(self) -> int:
+        return 0
 
     def list_faces_for_media(self, media_id: str) -> list:
         return []
@@ -176,7 +203,7 @@ class FakeRepository(MediaRepository):
         return None
 
 
-    def get_by_path(self, path: str) -> Optional[MediaFile]:
+    def get_by_path(self, path: str) -> MediaFile | None:
         for media in self.media.values():
             if media.path == path:
                 return media

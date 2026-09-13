@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 from sklearn.cluster import DBSCAN

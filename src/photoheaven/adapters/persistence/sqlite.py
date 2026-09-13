@@ -8,7 +8,6 @@ import shutil
 import time
 import uuid
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import (
     Column,
@@ -29,7 +28,14 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 from photoheaven.application.ports import MediaRepository, MediaSearchQuery
-from photoheaven.domain.models import Face, GeoPoint, Identity, MediaFile, MediaType
+from photoheaven.domain.models import (
+    Face,
+    GeoPoint,
+    Identity,
+    MediaFile,
+    MediaType,
+    PlaceRecord,
+)
 
 logger = logging.getLogger(__name__)
 Base = declarative_base()
@@ -51,6 +57,8 @@ class _MediaFileORM(Base):
     longitude = Column(Float, nullable=True)
     face_analysis_at = Column(DateTime, nullable=True)
     face_analysis_version = Column(String, nullable=True)
+    place_analysis_at = Column(DateTime, nullable=True)
+    place_analysis_version = Column(String, nullable=True)
     metadata_extracted = Column(Integer, nullable=False, default=1)
     perceptual_hash = Column(String(64), nullable=True, index=True)
     duration_seconds = Column(Float, nullable=True)
@@ -109,6 +117,21 @@ class _FaceORM(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class _PlaceRecordORM(Base):
+    __tablename__ = "place_records"
+
+    media_id = Column(
+        String(36), ForeignKey("media_files.id"), primary_key=True
+    )
+    country = Column(String, nullable=True)
+    country_source = Column(String, nullable=True)
+    country_confidence = Column(Float, nullable=True)
+    scene = Column(String, nullable=True)
+    scene_confidence = Column(Float, nullable=True)
+    analyzed_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    version = Column(String, nullable=False, default="unknown")
+
+
 def _media_to_domain(row: _MediaFileORM) -> MediaFile:
     gps = None
     if row.latitude is not None and row.longitude is not None:
@@ -129,6 +152,8 @@ def _media_to_domain(row: _MediaFileORM) -> MediaFile:
         gps=gps,
         face_analysis_at=row.face_analysis_at,
         face_analysis_version=row.face_analysis_version,
+        place_analysis_at=row.place_analysis_at,
+        place_analysis_version=row.place_analysis_version,
         metadata_extracted=bool(row.metadata_extracted),
         perceptual_hash=row.perceptual_hash,
         duration_seconds=row.duration_seconds,
@@ -153,6 +178,8 @@ def _media_to_orm(media: MediaFile) -> _MediaFileORM:
         longitude=media.gps.longitude if media.gps else None,
         face_analysis_at=media.face_analysis_at,
         face_analysis_version=media.face_analysis_version,
+        place_analysis_at=media.place_analysis_at,
+        place_analysis_version=media.place_analysis_version,
         metadata_extracted=1 if media.metadata_extracted else 0,
         perceptual_hash=media.perceptual_hash,
         duration_seconds=media.duration_seconds,
@@ -211,6 +238,32 @@ def _face_to_orm(face: Face) -> _FaceORM:
     )
 
 
+def _place_to_domain(row: _PlaceRecordORM) -> PlaceRecord:
+    return PlaceRecord(
+        media_id=row.media_id,
+        country=row.country,
+        country_source=row.country_source,
+        country_confidence=row.country_confidence,
+        scene=row.scene,
+        scene_confidence=row.scene_confidence,
+        analyzed_at=row.analyzed_at,
+        version=row.version,
+    )
+
+
+def _place_to_orm(record: PlaceRecord) -> _PlaceRecordORM:
+    return _PlaceRecordORM(
+        media_id=record.media_id,
+        country=record.country,
+        country_source=record.country_source,
+        country_confidence=record.country_confidence,
+        scene=record.scene,
+        scene_confidence=record.scene_confidence,
+        analyzed_at=record.analyzed_at,
+        version=record.version,
+    )
+
+
 def _identity_to_domain(row: _IdentityORM) -> Identity:
     return Identity(
         id=row.id,
@@ -234,6 +287,8 @@ def _maybe_backup_database(engine, inspector) -> None:
     elif not inspector.has_table("duplicate_groups"):
         will_migrate = True
     elif not inspector.has_table("duplicate_group_members"):
+        will_migrate = True
+    elif not inspector.has_table("place_records"):
         will_migrate = True
     else:
         existing_faces = {col["name"] for col in inspector.get_columns("faces")}
@@ -358,6 +413,14 @@ def _migrate_schema(engine) -> None:
     )
     _add_column_if_missing(
         "media_files",
+        Column("place_analysis_at", DateTime, nullable=True),
+    )
+    _add_column_if_missing(
+        "media_files",
+        Column("place_analysis_version", String, nullable=True),
+    )
+    _add_column_if_missing(
+        "media_files",
         Column("metadata_extracted", Integer, nullable=False, default=1),
     )
     _add_column_if_missing(
@@ -410,25 +473,37 @@ class SqliteMediaRepository(MediaRepository):
     """SQLite-backed repository using SQLAlchemy."""
 
     def __init__(self, db_path: str) -> None:
-        self.engine = create_engine(f"sqlite:///{db_path}")
+        self.engine = create_engine(
+            f"sqlite:///{db_path}",
+            connect_args={"timeout": 30},
+            echo=False,
+        )
+        self._configure_sqlite()
         Base.metadata.create_all(self.engine)
         _migrate_schema(self.engine)
         self._session_factory = sessionmaker(self.engine)
 
+    def _configure_sqlite(self) -> None:
+        """Apply pragmas that improve reliability on cloud/synced storage."""
+        with self.engine.connect() as conn:
+            conn.exec_driver_sql("PRAGMA busy_timeout = 30000")
+            conn.exec_driver_sql("PRAGMA journal_mode = WAL")
+            conn.exec_driver_sql("PRAGMA synchronous = NORMAL")
+
     def _session(self) -> Session:
         return self._session_factory()
 
-    def get_by_checksum(self, checksum: str) -> Optional[MediaFile]:
+    def get_by_checksum(self, checksum: str) -> MediaFile | None:
         with self._session() as session:
             row = session.query(_MediaFileORM).filter_by(checksum=checksum).first()
             return _media_to_domain(row) if row else None
 
-    def get_media_id_by_path(self, path: str) -> Optional[str]:
+    def get_media_id_by_path(self, path: str) -> str | None:
         with self._session() as session:
             row = session.query(_MediaFileORM.id).filter_by(path=path).first()
             return row[0] if row else None
 
-    def get_by_path(self, path: str) -> Optional[MediaFile]:
+    def get_by_path(self, path: str) -> MediaFile | None:
         with self._session() as session:
             row = session.query(_MediaFileORM).filter_by(path=path).first()
             return _media_to_domain(row) if row else None
@@ -470,6 +545,8 @@ class SqliteMediaRepository(MediaRepository):
                 existing.longitude = media.gps.longitude if media.gps else None
                 existing.face_analysis_at = media.face_analysis_at
                 existing.face_analysis_version = media.face_analysis_version
+                existing.place_analysis_at = media.place_analysis_at
+                existing.place_analysis_version = media.place_analysis_version
                 existing.metadata_extracted = 1 if media.metadata_extracted else 0
                 existing.perceptual_hash = media.perceptual_hash
                 existing.duration_seconds = media.duration_seconds
@@ -502,6 +579,16 @@ class SqliteMediaRepository(MediaRepository):
                 session.query(_MediaFileORM)
                 .order_by(_MediaFileORM.capture_datetime)
                 .offset(offset)
+                .limit(limit)
+                .all()
+            )
+            return [_media_to_domain(row) for row in rows]
+
+    def list_media_random(self, limit: int = 100) -> list[MediaFile]:
+        with self._session() as session:
+            rows = (
+                session.query(_MediaFileORM)
+                .order_by(func.random())
                 .limit(limit)
                 .all()
             )
@@ -571,6 +658,108 @@ class SqliteMediaRepository(MediaRepository):
             row.face_analysis_version = version
             row.updated_at = analyzed_at
             session.commit()
+
+    def get_unprocessed_places_media(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[MediaFile]:
+        with self._session() as session:
+            rows = (
+                session.query(_MediaFileORM)
+                .filter(_MediaFileORM.place_analysis_at.is_(None))
+                .order_by(_MediaFileORM.capture_datetime)
+                .offset(offset)
+                .limit(limit)
+                .all()
+            )
+            return [_media_to_domain(row) for row in rows]
+
+    def update_media_place_analysis(
+        self, media_id: str, analyzed_at: datetime, version: str
+    ) -> None:
+        with self._session() as session:
+            row = session.get(_MediaFileORM, media_id)
+            if row is None:
+                logger.warning("Cannot mark place analysis: media %s not found", media_id)
+                return
+            row.place_analysis_at = analyzed_at
+            row.place_analysis_version = version
+            row.updated_at = analyzed_at
+            session.commit()
+
+    def save_place_record(self, record: PlaceRecord) -> None:
+        """Persist a place record, updating in place if it already exists."""
+        with self._session() as session:
+            existing = session.get(_PlaceRecordORM, record.media_id)
+            if existing:
+                existing.country = record.country
+                existing.country_source = record.country_source
+                existing.country_confidence = record.country_confidence
+                existing.scene = record.scene
+                existing.scene_confidence = record.scene_confidence
+                existing.analyzed_at = record.analyzed_at
+                existing.version = record.version
+            else:
+                session.add(_place_to_orm(record))
+            session.commit()
+
+    def get_place_record(self, media_id: str) -> PlaceRecord | None:
+        with self._session() as session:
+            row = session.get(_PlaceRecordORM, media_id)
+            return _place_to_domain(row) if row else None
+
+    def count_place_records(self) -> int:
+        with self._session() as session:
+            return session.query(_PlaceRecordORM).count()
+
+    def list_place_records_summary(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[dict]:
+        with self._session() as session:
+            rows = (
+                session.query(
+                    _PlaceRecordORM.media_id,
+                    _MediaFileORM.path,
+                    _PlaceRecordORM.country,
+                    _PlaceRecordORM.country_source,
+                    _PlaceRecordORM.scene,
+                )
+                .join(
+                    _MediaFileORM,
+                    _PlaceRecordORM.media_id == _MediaFileORM.id,
+                )
+                .order_by(_PlaceRecordORM.analyzed_at.desc())
+                .offset(offset)
+                .limit(limit)
+                .all()
+            )
+            return [
+                {
+                    "media_id": row.media_id,
+                    "path": row.path,
+                    "country": row.country,
+                    "country_source": row.country_source,
+                    "scene": row.scene,
+                }
+                for row in rows
+            ]
+
+    def reset_place_analysis(self) -> int:
+        """Delete all place records and reset analysis flags on media files."""
+        with self._session() as session:
+            session.query(_PlaceRecordORM).delete(synchronize_session=False)
+            updated = (
+                session.query(_MediaFileORM)
+                .filter(_MediaFileORM.place_analysis_at.isnot(None))
+                .update(
+                    {
+                        "place_analysis_at": None,
+                        "place_analysis_version": None,
+                    },
+                    synchronize_session=False,
+                )
+            )
+            session.commit()
+            return updated
 
     def list_faces_for_media(self, media_id: str) -> list[Face]:
         with self._session() as session:
@@ -1066,10 +1255,32 @@ class SqliteMediaRepository(MediaRepository):
             session.query(_FaceORM).filter_by(media_id=media_id).delete(
                 synchronize_session=False
             )
+            session.query(_PlaceRecordORM).filter_by(media_id=media_id).delete(
+                synchronize_session=False
+            )
             session.query(_DuplicateGroupMemberORM).filter_by(
                 media_id=media_id
             ).delete(synchronize_session=False)
             session.delete(media)
+            session.commit()
+
+    def delete_media_batch(self, media_ids: list[str]) -> None:
+        """Delete multiple media records and their linked data in one transaction."""
+        if not media_ids:
+            return
+        with self._session() as session:
+            session.query(_FaceORM).filter(
+                _FaceORM.media_id.in_(media_ids)
+            ).delete(synchronize_session=False)
+            session.query(_PlaceRecordORM).filter(
+                _PlaceRecordORM.media_id.in_(media_ids)
+            ).delete(synchronize_session=False)
+            session.query(_DuplicateGroupMemberORM).filter(
+                _DuplicateGroupMemberORM.media_id.in_(media_ids)
+            ).delete(synchronize_session=False)
+            session.query(_MediaFileORM).filter(
+                _MediaFileORM.id.in_(media_ids)
+            ).delete(synchronize_session=False)
             session.commit()
 
     def get_identity_photo_counts(self) -> dict[str, int]:

@@ -2,9 +2,6 @@
 
 import hashlib
 from pathlib import Path
-from typing import Optional
-
-import pytest
 
 from photoheaven.application.archive_service import ArchiveService
 from photoheaven.domain.models import MediaFile, MediaType
@@ -26,7 +23,7 @@ class FakeRepository:
     def save_media(self, media: MediaFile) -> None:
         self.media[media.id] = media
 
-    def get_by_path(self, path: str) -> Optional[MediaFile]:
+    def get_by_path(self, path: str) -> MediaFile | None:
         for media in self.media.values():
             if media.path == path:
                 return media
@@ -39,10 +36,10 @@ class FakeRepository:
         self.media.pop(media_id, None)
 
     # Stub methods required by the abstract base class.
-    def get_by_checksum(self, checksum: str) -> Optional[MediaFile]:
+    def get_by_checksum(self, checksum: str) -> MediaFile | None:
         return None
 
-    def get_media_id_by_path(self, path: str) -> Optional[str]:
+    def get_media_id_by_path(self, path: str) -> str | None:
         media = self.get_by_path(path)
         return media.id if media else None
 

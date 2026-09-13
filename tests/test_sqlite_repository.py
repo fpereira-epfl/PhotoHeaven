@@ -8,7 +8,13 @@ from pathlib import Path
 from uuid import uuid4
 
 from photoheaven.adapters.persistence.sqlite import SqliteMediaRepository
-from photoheaven.domain.models import Face, GeoPoint, Identity, MediaFile, MediaType
+from photoheaven.domain.models import (
+    Face,
+    Identity,
+    MediaFile,
+    MediaType,
+    PlaceRecord,
+)
 
 
 def _media(path: str, checksum: str | None = None) -> MediaFile:
@@ -317,3 +323,157 @@ def test_get_identity_summary_counts_distinct_photos(
     assert summaries[0]["identity_name"] == "Alice"
     assert summaries[0]["face_count"] == 3
     assert summaries[0]["photo_count"] == 2
+
+
+def test_save_and_load_place_record(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    repo = SqliteMediaRepository(str(db_path))
+
+    media = _media("/photos/place.jpg")
+    repo.save_media(media)
+
+    record = PlaceRecord(
+        media_id=media.id,
+        country="France",
+        country_source="gps",
+        country_confidence=0.95,
+        scene="beach",
+        scene_confidence=0.72,
+        version="gps+test",
+    )
+    repo.save_place_record(record)
+
+    reloaded = repo.get_place_record(media.id)
+    assert reloaded is not None
+    assert reloaded.country == "France"
+    assert reloaded.country_source == "gps"
+    assert reloaded.scene == "beach"
+    assert reloaded.version == "gps+test"
+    assert repo.count_place_records() == 1
+
+
+def test_update_place_record_replaces_existing(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    repo = SqliteMediaRepository(str(db_path))
+
+    media = _media("/photos/place.jpg")
+    repo.save_media(media)
+
+    repo.save_place_record(
+        PlaceRecord(
+            media_id=media.id,
+            country="France",
+            country_source="gps",
+            scene="beach",
+            version="v1",
+        )
+    )
+    repo.save_place_record(
+        PlaceRecord(
+            media_id=media.id,
+            country="Italy",
+            country_source="visual",
+            scene="restaurant",
+            version="v2",
+        )
+    )
+
+    reloaded = repo.get_place_record(media.id)
+    assert reloaded is not None
+    assert reloaded.country == "Italy"
+    assert reloaded.scene == "restaurant"
+    assert repo.count_place_records() == 1
+
+
+def test_get_unprocessed_places_media_skips_analysed(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    repo = SqliteMediaRepository(str(db_path))
+
+    media_a = _media("/photos/a.jpg")
+    media_b = _media("/photos/b.jpg")
+    repo.save_media(media_a)
+    repo.save_media(media_b)
+
+    repo.update_media_place_analysis(
+        media_a.id, analyzed_at=datetime.utcnow(), version="v1"
+    )
+
+    unprocessed = repo.get_unprocessed_places_media(limit=10)
+    assert len(unprocessed) == 1
+    assert unprocessed[0].id == media_b.id
+
+
+def test_delete_media_removes_place_record(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    repo = SqliteMediaRepository(str(db_path))
+
+    media = _media("/photos/place.jpg")
+    repo.save_media(media)
+    repo.save_place_record(
+        PlaceRecord(media_id=media.id, country="Spain", version="v1")
+    )
+
+    repo.delete_media(media.id)
+
+    assert repo.get_place_record(media.id) is None
+    assert repo.count_place_records() == 0
+
+
+def test_list_place_records_summary_includes_paths(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    repo = SqliteMediaRepository(str(db_path))
+
+    media = _media("/photos/place.jpg")
+    repo.save_media(media)
+    repo.save_place_record(
+        PlaceRecord(
+            media_id=media.id,
+            country="Portugal",
+            country_source="gps",
+            scene="beach",
+            version="v1",
+        )
+    )
+
+    summaries = repo.list_place_records_summary(limit=10)
+    assert len(summaries) == 1
+    assert summaries[0]["path"] == "/photos/place.jpg"
+    assert summaries[0]["country"] == "Portugal"
+    assert summaries[0]["country_source"] == "gps"
+    assert summaries[0]["scene"] == "beach"
+
+
+def test_reset_place_analysis_clears_records_and_flags(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    repo = SqliteMediaRepository(str(db_path))
+
+    media = _media("/photos/place.jpg")
+    repo.save_media(media)
+    repo.update_media_place_analysis(
+        media.id, analyzed_at=datetime.utcnow(), version="v1"
+    )
+    repo.save_place_record(
+        PlaceRecord(media_id=media.id, country="Portugal", version="v1")
+    )
+
+    reset_count = repo.reset_place_analysis()
+
+    assert reset_count == 1
+    assert repo.count_place_records() == 0
+    reloaded = repo.get_by_path(media.path)
+    assert reloaded is not None
+    assert reloaded.place_analysis_at is None
+    assert reloaded.place_analysis_version is None
+
+
+def test_list_media_random_returns_distinct_subset(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    repo = SqliteMediaRepository(str(db_path))
+
+    for idx in range(10):
+        repo.save_media(_media(f"/photos/{idx}.jpg"))
+
+    results = repo.list_media_random(limit=3)
+
+    assert len(results) == 3
+    assert len({media.id for media in results}) == 3
